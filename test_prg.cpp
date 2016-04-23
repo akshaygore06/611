@@ -968,7 +968,7 @@ void client(string client_ip)
 
   if((status=connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
   {
-    perror("connect deamon : ");
+    perror("connect deamon");
     exit(1);
   }
   //release the information allocated by getaddrinfo()
@@ -1003,14 +1003,14 @@ void client(string client_ip)
     exit(1);
   }
 
-//  write(sockfd, "1234567890", 10);
+  write(sockfd, "Client --> server working..!! \n", sizeof("Client --> server working..!! \n"));
 
 
   //printf("client wrote %d characters\n", n);
   char buffer[100];
 
 	write(debugFD,buffer, sizeof(buffer));
-	perror("3456789");
+//	perror("3456789");
   memset(buffer, 0, 100);
   read(sockfd, buffer, 99);
   //READ(sockfd, buffer, 99);
