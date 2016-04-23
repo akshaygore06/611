@@ -686,7 +686,7 @@ void create_server_daemon()
 	  chdir("/");
 
 		//sleep(3);
-		debugFD = open("/home/akshay/611/soc/mypipe",O_WRONLY);
+		debugFD = open("/home/akshay/private_git_611/611/mypipe",O_WRONLY);
 
 		write(debugFD, "daemon created\n", sizeof("daemon created\n"));
 
@@ -868,23 +868,23 @@ write(debugFD,"Accepted\n",sizeof("Accepted\n")); /// writting to pipe
   }
 
 	sleep(10);
-			  ///writing to the socket
-				if(write(new_sockfd, &rows, sizeof(int)) == -1)
-					{
-						perror("writing error");
-					}
-				if(write(new_sockfd, &cols, sizeof(int)) == -1)
-					{
-						perror("writing error");
-					}
-
-				if(write(new_sockfd, local_mapcopy, rows*cols) ==-1)
-					{
-						perror("writing error");
-					}
-					while(1)
-					{
-					}
+			  // ///writing to the socket
+				// if(write(new_sockfd, &rows, sizeof(int)) == -1)
+				// 	{
+				// 		perror("writing error");
+				// 	}
+				// if(write(new_sockfd, &cols, sizeof(int)) == -1)
+				// 	{
+				// 		perror("writing error");
+				// 	}
+				//
+				// if(write(new_sockfd, local_mapcopy, rows*cols) ==-1)
+				// 	{
+				// 		perror("writing error");
+				// 	}
+				// 	while(1)
+				// 	{
+				// 	}
 
   // char arr[11];
   // memset(arr, 0, 11);
@@ -990,7 +990,7 @@ void client(string client_ip)
 
 
 //const char* message="One small step for (a) man, one large  leap for Mankind";
- const char* message = "Todd Gibson";
+ const char* message = "Todd Gibson\n";
   int n ;
   if((n=WRITE(sockfd, message, strlen(message)))==-1)
   {
