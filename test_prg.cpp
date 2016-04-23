@@ -975,17 +975,18 @@ void client(string client_ip)
 	int rows = 0 ,cols=0;
 	int mapSize = 0;
 	int client_shared_mem;
+	GameBoard* client_shared_map;
 
 	READ(sockfd,&rows,sizeof(int));
   READ(sockfd,&cols,sizeof(int));
 
 	mapSize = rows* cols;
 
-	client_shared_mem=shm_open("/Client_SharedMemAG",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR);
+  client_shared_mem =shm_open("/Client_SharedMemAG",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR);
   ftruncate(client_shared_mem,mapSize + sizeof(GameBoard));
 	client_shared_map = (GameBoard*)mmap(NULL, mapSize+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, client_shared_mem , 0);
 
-	
+
 
 
 //const char* message="One small step for (a) man, one large  leap for Mankind";
