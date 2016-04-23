@@ -164,7 +164,7 @@ mqueue_name[4] = "/agore_player4_mq";
 	{
 	//	string client_ip = argv[1] ;
 	//	client(client_ip);
-	client ("192.168.98.191");
+	client ("192.168.98.195");
 	}
 
 
@@ -861,7 +861,7 @@ write(debugFD,"Accepted\n",sizeof("Accepted\n")); /// writting to pipe
   char buffer[100];
  memset(buffer,0,100);
   int n;
-  if((n=READ(new_sockfd, buffer, 99))==-1)
+  if((n=read(new_sockfd, buffer, 99))==-1)
   {
     perror("read is failing");
     printf("n=%d\n", n);
@@ -933,7 +933,9 @@ void client(string client_ip)
   umask(0);
   chdir("/");
 
-	////////////////////////////////DAEMON END////////////////////////////////////
+	debugFD = open("/home/akshay/private_git_611/611/mypipe",O_WRONLY);
+	write(debugFD,"client deamon running\n", sizeof("client deamon running\n"));
+////////////////////////////////DAEMON END////////////////////////////////////
 
 ////////////////////////////////CLIENT SOCKET///////////////////////////////////
 
@@ -966,7 +968,7 @@ void client(string client_ip)
 
   if((status=connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
   {
-    perror("connect");
+    perror("connect deamon : ");
     exit(1);
   }
   //release the information allocated by getaddrinfo()
@@ -977,35 +979,41 @@ void client(string client_ip)
 	int client_shared_mem;
 	GameBoard* client_shared_map;
 
-	READ(sockfd,&rows,sizeof(int));
-  READ(sockfd,&cols,sizeof(int));
+	// READ(sockfd,&rows,sizeof(int));
+  // READ(sockfd,&cols,sizeof(int));
+	//
+	// mapSize = rows* cols;
+	//
+  // client_shared_mem =shm_open("/Client_SharedMemAG",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR);
+  // ftruncate(client_shared_mem,mapSize + sizeof(GameBoard));
+	// client_shared_map = (GameBoard*)mmap(NULL, mapSize+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, client_shared_mem , 0);
+	//
+	//
+	//
+	//
 
-	mapSize = rows* cols;
-
-  client_shared_mem =shm_open("/Client_SharedMemAG",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR);
-  ftruncate(client_shared_mem,mapSize + sizeof(GameBoard));
-	client_shared_map = (GameBoard*)mmap(NULL, mapSize+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, client_shared_mem , 0);
-
-
-
+	write(debugFD,"before reading \n", sizeof("before reading \n"));
 
 //const char* message="One small step for (a) man, one large  leap for Mankind";
  const char* message = "Todd Gibson\n";
   int n ;
-  if((n=WRITE(sockfd, message, strlen(message)))==-1)
+  if((n=sockfd, message, strlen(message))==-1)
   {
     perror("write");
     exit(1);
   }
 
-  WRITE(sockfd, "1234567890", 10);
+//  write(sockfd, "1234567890", 10);
 
 
   //printf("client wrote %d characters\n", n);
   char buffer[100];
+
+	write(debugFD,buffer, sizeof(buffer));
+	perror("3456789");
   memset(buffer, 0, 100);
-  //read(sockfd, buffer, 99);
-  READ(sockfd, buffer, 99);
+  read(sockfd, buffer, 99);
+  //READ(sockfd, buffer, 99);
   printf("%s\n", buffer);
   close(sockfd);
 
