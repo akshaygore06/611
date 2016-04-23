@@ -867,7 +867,7 @@ write(debugFD,"Accepted\n",sizeof("Accepted\n")); /// writting to pipe
     printf("n=%d\n", n);
   }
 
-	sleep(10);
+//	sleep(10);
 			  // ///writing to the socket
 				// if(write(new_sockfd, &rows, sizeof(int)) == -1)
 				// 	{
@@ -900,7 +900,7 @@ write(debugFD,"Accepted\n",sizeof("Accepted\n")); /// writting to pipe
 //  printf("The client said: %s\n", buffer);
 
 //std::cerr << "/* The client said: \n"<< buffer << std::endl;
-  WRITE(debugFD,buffer,sizeof(buffer)); //  debuging pipe
+  WRITE(debugFD,"before wrintg to socket..!!\n",sizeof("before wrintg to socket..!!\n")); //  debuging pipe
 	const char* message="These are the times that try men's souls.\n";
   //cerr << "\nwriting";
 	write(new_sockfd, message, strlen(message));
@@ -1009,7 +1009,7 @@ void client(string client_ip)
   //printf("client wrote %d characters\n", n);
   char buffer[100];
 
-	write(debugFD,buffer, sizeof(buffer));
+//	write(debugFD,buffer, sizeof(buffer));
 //	perror("3456789");
   memset(buffer, 0, 100);
   read(sockfd, buffer, 99);
