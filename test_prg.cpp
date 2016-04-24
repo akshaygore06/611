@@ -56,6 +56,7 @@ bool sig=false;
 int debugFD;
 GameBoard* goldmap;
 GameBoard* gm;
+GameBoard* client_goldmap;
 int fd;
 unsigned char* local_mapcopy;
 sem_t* GameBoard_Sem;
@@ -90,6 +91,7 @@ int main(int argc, char* argv[])
 	char* theMine;
 	const char* ptr;
 	unsigned char* mp;
+	unsigned char* client_mp;
 	int player_position;
 	unsigned char current_player;
 	pid_t current_pid;
@@ -857,24 +859,27 @@ void create_server_daemon()
 	char buffer[100];
 	memset(buffer,0,100);
 	int n;
-	if((n=READ(new_sockfd, buffer, 99))==-1)
+	/*
+	* listen to client
+	**/
+	// if((n=READ(new_sockfd, buffer, 99))==-1)
+	// {
+	// 	perror("read is failing");
+	// 	printf("n=%d\n", n);
+	// }
+	//
+	// WRITE(debugFD, buffer, sizeof(buffer));
+
+	WRITE(new_sockfd,&rows,sizeof(rows));
+	WRITE(new_sockfd,&cols,sizeof(cols));
+
+	unsigned char* mptr = local_mapcopy;
+
+	for(int i = 0 ; i < rows* cols;i++)
 	{
-		perror("read is failing");
-		printf("n=%d\n", n);
+		WRITE(new_sockfd,&mptr[i],sizeof(mptr[i]));
 	}
 
-	// char arr[11];
-	// memset(arr, 0, 11);
-	// READ(new_sockfd, arr, 3);
-	// cout << "first read=" << arr << endl;
-	// memset(arr, 0, 11);
-	// READ(new_sockfd, arr, 4);
-	// cout << "second read=" << arr << endl;
-	// memset(arr, 0, 11);
-	// READ(new_sockfd, arr, 3);
-	// cout << "third read=" << arr << endl;
-
-	printf("The client said: %s\n", buffer);
 
 	const char* message="These are the times that try men's souls.";
 	WRITE(new_sockfd, message, strlen(message));
@@ -886,7 +891,7 @@ void create_server_daemon()
 void client(string client_ip)
 {
 
-////////////////////////////////DAEMON START////////////////////////////////////
+////////////////////////////////CLIENT DAEMON START////////////////////////////////////
 	if(fork()>0)
   {
     //I'm the parent, leave the function
@@ -911,84 +916,105 @@ void client(string client_ip)
 
 ////////////////////////////////CLIENT SOCKET///////////////////////////////////
 
+int sockfd; //file descriptor for the socket
+int status; //for error checking
 
-	int sockfd; //file descriptor for the socket
-  int status; //for error checking
+//change this # between 2000-65k before using
+const char* portno="42424";
 
-  //change this # between 2000-65k before using
-  const char* portno="42424";
+struct addrinfo hints;
+memset(&hints, 0, sizeof(hints)); //zero out everything in structure
+hints.ai_family = AF_UNSPEC; //don't care. Either IPv4 or IPv6
+hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
 
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints)); //zero out everything in structure
-  hints.ai_family = AF_UNSPEC; //don't care. Either IPv4 or IPv6
-  hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
+struct addrinfo *servinfo;
+//instead of "localhost", it could by any domain name
+if((status=getaddrinfo("localhost", portno, &hints, &servinfo))==-1)
+{
+	fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+	exit(1);
+}
+sockfd=socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
 
-  struct addrinfo *servinfo;
-  //instead of "localhost", it could by any domain name
-  //if((status=getaddrinfo("localhost", portno, &hints, &servinfo))==-1)
-	if((status=getaddrinfo(client_ip.c_str(), portno, &hints, &servinfo))==-1)
-  {
-    fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-    exit(1);
-  }
-  sockfd=socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+if((status=connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
+{
+	perror("connect");
+	exit(1);
+}
+//release the information allocated by getaddrinfo()
+freeaddrinfo(servinfo);
 
-	if( sockfd == -1)
+const char* message="One small step for (a) man, one large  leap for Mankind";
+//  const char* message = "Todd Gibson yudi jagani";
+int n ;
+if((n=WRITE(sockfd, message, strlen(message)))==-1)
+{
+	perror("write");
+	exit(1);
+}
+
+//WRITE(sockfd, "1234567890", 10);
+
+
+int rows=0,cols=0;
+
+READ(sockfd,&rows,sizeof(int));
+READ(sockfd,&cols,sizeof(int));
+
+
+int client_mapSize = rows * cols;
+
+//std::cerr << "client_mapSize :"<<client_mapSize << std::endl;
+//printf("client wrote %d characters\n", n);
+// char buffer[100];
+// memset(buffer, 0, 100);
+// READ(sockfd, buffer, 99);
+// //READ(sockfd, buffer, 99);
+// write(debugFD, buffer, sizeof(buffer));
+// printf("%s\n", buffer);
+
+
+int client_shared_mem=shm_open("/Client_Shared_MemAG",O_RDWR|O_CREAT,S_IWUSR|S_IRUSR);
+ftruncate(client_shared_mem ,client_mapSize + sizeof(GameBoard));
+client_goldmap = (GameBoard*) mmap(0,client_mapSize + sizeof(GameBoard),PROT_WRITE,MAP_SHARED,client_shared_mem,0);
+
+client_goldmap->rows = rows;
+client_goldmap->cols = cols;
+client_goldmap->daemonID = getpid();
+//unsigned char* mptr = clie
+unsigned char read_from_server;
+
+for(int i = 0; i < rows*cols;i++)
+{
+	READ(sockfd, &read_from_server,1);
+	client_goldmap->map[i] = read_from_server;
+}
+
+write(debugFD,"printing client local copy \n",sizeof("printing client local copy \n"));
+
+
+for(int i =0;i < rows*cols ; i++)
+{
+
+	if(client_goldmap->map[i] == 0)
 	{
-		perror(" no sockfd");
+		write(debugFD," ",sizeof(" "));
 	}
-
-  if((status=connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
-  {
-    perror("connect deamon");
-    exit(1);
-  }
-  //release the information allocated by getaddrinfo()
-  freeaddrinfo(servinfo);
-
-	int rows = 0 ,cols=0;
-	int mapSize = 0;
-	int client_shared_mem;
-	GameBoard* client_shared_map;
-
-	// READ(sockfd,&rows,sizeof(int));
-  // READ(sockfd,&cols,sizeof(int));
-	//
-	// mapSize = rows* cols;
-	//
-  // client_shared_mem =shm_open("/Client_SharedMemAG",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR);
-  // ftruncate(client_shared_mem,mapSize + sizeof(GameBoard));
-	// client_shared_map = (GameBoard*)mmap(NULL, mapSize+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, client_shared_mem , 0);
-	//
-	//
-	//
-	//
-
-	write(debugFD,"before reading \n", sizeof("before reading \n"));
-
-//const char* message="One small step for (a) man, one large  leap for Mankind";
- const char* message = "Todd Gibson\n";
-  int n ;
-  if((n=sockfd, message, strlen(message))==-1)
-  {
-    perror("write");
-    exit(1);
-  }
-
-  write(sockfd, "Client --> server working..!! \n", sizeof("Client --> server working..!! \n"));
+	else if(client_goldmap->map[i] == G_WALL)
+	{
+			write(debugFD,"*",sizeof("*"));
+	}
+}
 
 
-  //printf("client wrote %d characters\n", n);
-  char buffer[100];
 
-//	write(debugFD,buffer, sizeof(buffer));
-//	perror("3456789");
-  memset(buffer, 0, 100);
-  read(sockfd, buffer, 99);
-  //READ(sockfd, buffer, 99);
-  printf("%s\n", buffer);
-	write(debugFD,buffer,sizeof(buffer));
-  close(sockfd);
+close(sockfd);
+
+
+
+
+
+
 
 ////////////////////////////CLIENT SOCKET END///////////////////////////////////
 
