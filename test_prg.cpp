@@ -166,7 +166,7 @@ mqueue_name[4] = "/agore_player4_mq";
 	{
 	//	string client_ip = argv[1] ;
 	//	client(client_ip);
-	client ("192.168.98.195");
+	client ("192.168.98.196");
 	}
 
 
@@ -862,23 +862,25 @@ void create_server_daemon()
 	/*
 	* listen to client
 	**/
-	// if((n=READ(new_sockfd, buffer, 99))==-1)
-	// {
-	// 	perror("read is failing");
-	// 	printf("n=%d\n", n);
-	// }
-	//
-	// WRITE(debugFD, buffer, sizeof(buffer));
-
-	WRITE(new_sockfd,&rows,sizeof(rows));
-	WRITE(new_sockfd,&cols,sizeof(cols));
-
-	unsigned char* mptr = local_mapcopy;
-
-	for(int i = 0 ; i < rows* cols;i++)
+	if((n=READ(new_sockfd, buffer, 99))==-1)
 	{
-		WRITE(new_sockfd,&mptr[i],sizeof(mptr[i]));
+		perror("read is failing");
+		printf("n=%d\n", n);
 	}
+
+	 write(debugFD, buffer, sizeof(buffer));
+
+	 write(debugFD, &rows, sizeof(int));
+
+	 WRITE(new_sockfd,&rows,sizeof(rows));
+	 WRITE(new_sockfd,&cols,sizeof(cols));
+
+	// unsigned char* mptr = local_mapcopy;
+	//
+	// for(int i = 0 ; i < rows* cols;i++)
+	// {
+	// 	write(new_sockfd,&mptr[i],sizeof(mptr[i]));
+	// }
 
 
 	const char* message="These are the times that try men's souls.";
@@ -929,7 +931,7 @@ hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
 
 struct addrinfo *servinfo;
 //instead of "localhost", it could by any domain name
-if((status=getaddrinfo("localhost", portno, &hints, &servinfo))==-1)
+if((status=getaddrinfo("192.168.98.196", portno, &hints, &servinfo))==-1)
 {
 	fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
 	exit(1);
@@ -958,20 +960,22 @@ if((n=WRITE(sockfd, message, strlen(message)))==-1)
 
 int rows=0,cols=0;
 
-READ(sockfd,&rows,sizeof(int));
-READ(sockfd,&cols,sizeof(int));
+ READ(sockfd,&rows,sizeof(int));
+ READ(sockfd,&cols,sizeof(int));
 
+write(debugFD,&rows,sizeof(rows));
 
 int client_mapSize = rows * cols;
 
-//std::cerr << "client_mapSize :"<<client_mapSize << std::endl;
+
+std::cerr << "client_mapSize :"<<client_mapSize << std::endl;
 //printf("client wrote %d characters\n", n);
-// char buffer[100];
-// memset(buffer, 0, 100);
-// READ(sockfd, buffer, 99);
-// //READ(sockfd, buffer, 99);
-// write(debugFD, buffer, sizeof(buffer));
-// printf("%s\n", buffer);
+char buffer[100];
+memset(buffer, 0, 100);
+READ(sockfd, buffer, 99);
+//READ(sockfd, buffer, 99);
+write(debugFD, buffer, sizeof(buffer));
+printf("%s\n", buffer);
 
 
 int client_shared_mem=shm_open("/Client_Shared_MemAG",O_RDWR|O_CREAT,S_IWUSR|S_IRUSR);
@@ -986,7 +990,7 @@ unsigned char read_from_server;
 
 for(int i = 0; i < rows*cols;i++)
 {
-	READ(sockfd, &read_from_server,1);
+	read(sockfd, &read_from_server,1);
 	client_goldmap->map[i] = read_from_server;
 }
 
@@ -1005,7 +1009,7 @@ for(int i =0;i < rows*cols ; i++)
 			write(debugFD,"*",sizeof("*"));
 	}
 }
-
+//
 
 
 close(sockfd);
