@@ -41,9 +41,9 @@ struct GameBoard {
 	int rows; //4 bytes
 	int cols; //4 bytes
 	pid_t player_pid[5];
-	unsigned char player ;
+	unsigned char player;
 	unsigned char map[0];
-	int daemonID;
+	int daemonID = 0;
 
 };
 
@@ -57,13 +57,16 @@ int debugFD;
 GameBoard* goldmap;
 GameBoard* gm;
 GameBoard* client_goldmap;
+unsigned char* localClient;
 int fd;
 unsigned char* local_mapcopy;
 sem_t* GameBoard_Sem;
-
+int pipefd[2];
 int NumberOfRows = -1;
 int NumberOfColumns = -1;
-
+unsigned char SockPlayer;
+unsigned char byte,listen_var,listen_var1;
+int sockfd,new_sockfd;
 /** Function Declaration */
 int insertGold(unsigned char*,int ,int ,int);
 int insertPlayer(unsigned char*,unsigned char ,int ,int);
@@ -81,6 +84,15 @@ void client(string);
 
 int main(int argc, char* argv[])
 {
+	//string client_ip = "localhost" ;
+		if(argc == 2)
+		{
+		//	string client_ip = argv[1] ;
+		//	client(client_ip);
+		client ("192.168.98.211");
+		}
+
+
 	/** Variable Declaration */
 	ifstream inputFile;
 	string Line,CompleteMapString= "";
@@ -96,6 +108,7 @@ int main(int argc, char* argv[])
 	unsigned char current_player;
 	pid_t current_pid;
 	string msgString;
+
 
 mqueue_name[0] = "/agore_player0_mq";
 mqueue_name[1] = "/agore_player1_mq";
@@ -131,6 +144,8 @@ mqueue_name[4] = "/agore_player4_mq";
 	mq_attributes.mq_maxmsg=10;
 	mq_attributes.mq_msgsize=120;
 
+if(argc != 2)
+{
 	/** Reading map file */
 	inputFile.open("mymap.txt");
 	while(inputFile != '\0')
@@ -155,21 +170,12 @@ mqueue_name[4] = "/agore_player4_mq";
 		}
 	}
 	inputFile.close();
-	mapSize = NumberOfRows * NumberOfColumns;
 
+	mapSize = NumberOfRows * NumberOfColumns;
+}
 /*
 	argv checking
 */
-
-//string client_ip = "localhost" ;
-	if(argc == 2)
-	{
-	//	string client_ip = argv[1] ;
-	//	client(client_ip);
-	client ("192.168.98.196");
-	}
-
-
 
 
 	/** Creating semaphore */
@@ -245,8 +251,8 @@ mqueue_name[4] = "/agore_player4_mq";
 
 		// read shared map
 		int map_rows, map_columns ;
-		read(fdiscriptor, &map_rows, sizeof(int));
-		read(fdiscriptor, &map_columns, sizeof(int));
+		READ(fdiscriptor, &map_rows, sizeof(int));
+		READ(fdiscriptor, &map_columns, sizeof(int));
 
 		goldmap = (GameBoard*)mmap(NULL, map_rows*map_columns+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, fdiscriptor, 0);
 		if(goldmap == MAP_FAILED )
@@ -261,6 +267,7 @@ mqueue_name[4] = "/agore_player4_mq";
 		{
 			current_player = G_PLR0;
 			goldmap->player_pid[0] = getpid();
+		//		goldmap->daemonID = 0;
 			readQueue(mqueue_name[0]);
 		}
 		else if (goldmap->player_pid[1] == 0)
@@ -296,11 +303,23 @@ mqueue_name[4] = "/agore_player4_mq";
 		}
 
 		player_position = insertPlayer(goldmap->map,current_player,NumberOfRows,NumberOfColumns);
+
 	}
 
 	sem_wait(GameBoard_Sem);
 	goldmap->player |= current_player;
 	sem_post(GameBoard_Sem);
+
+
+	if(goldmap->daemonID == 0)
+	{
+			cout << "IS It??" << endl;
+			create_server_daemon();
+	}
+	else if(goldmap->daemonID != 0 )
+	{
+		kill(goldmap->daemonID,SIGHUP);
+	}
 
 	Map goldMine(goldmap->map,goldmap->rows,goldmap->cols);
 
@@ -308,20 +327,9 @@ mqueue_name[4] = "/agore_player4_mq";
 	mapptr = &goldMine;
 
 	refreshScreen(goldmap);
-	goldmap->daemonID = 0;
+//	goldmap->daemonID = 0;
 //	cout<<"deamon ig before :"<< goldmap->daemonID << endl;
-	if(goldmap->daemonID == 0 )
-	{
-			//std::cerr<<"inside deomon call"<<std::endl;
-			create_server_daemon();
 
-			//cout <<"2345678"<<endl;
-			//std::cerr << "end of deamon creation" << std::endl;
-	}
-	else
-	{
-			//send sighup signal
-	}
 
 
 	/** Code of Movement*/
@@ -666,18 +674,16 @@ void create_server_daemon()
 	  {
 	    return;
 	  }
-
 	  if(fork()>0)
 		{
     	exit(0);
 		}
-
 	  if(setsid()==-1)
 		{
 			exit(1);
 		}
 
-	  for(int i; i< sysconf(_SC_OPEN_MAX); ++i)
+	  for(int i = 0; i< sysconf(_SC_OPEN_MAX); ++i)
 		{
 			close(i);
 		}
@@ -690,37 +696,44 @@ void create_server_daemon()
 		//sleep(3);
 		debugFD = open("/home/akshay/private_git_611/611/mypipe",O_WRONLY);
 
-		write(debugFD, "daemon created\n", sizeof("daemon created\n"));
+		WRITE(debugFD, "daemon created\n", sizeof("daemon created\n"));
 
 		int shm_fd = shm_open("/GameBoard_Mem",O_EXCL|O_RDWR , S_IRUSR | S_IWUSR);
 
 		if(shm_fd == -1)
 		{
 		//	cerr<<"deamon shm_Fd -- "<<endl;
-			write(debugFD, "ERROR : deamon shm_Fd \n", sizeof("ERROR : deamon shm_Fd \n"));
+			WRITE(debugFD, "ERROR : deamon shm_Fd \n", sizeof("ERROR : deamon shm_Fd \n"));
 		}
 
 
 		//goldmap->daemonID = getpid();
-		int rows,cols;
-		read(shm_fd, &rows, sizeof(int));
-		read(shm_fd, &cols, sizeof(int));
+		int rows =0,cols = 0;
+		//READ(shm_fd, &rows, sizeof(int));
+		//READ(shm_fd, &cols, sizeof(int));
 
-
+		rows = goldmap->rows;
+		cols = goldmap->cols;
 
 		gm = (GameBoard*)mmap(NULL, rows*cols+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, shm_fd, 0);
 
 		if(gm== MAP_FAILED )
 		{
-			write(debugFD, "MAP Reading for Daemon\n", sizeof("MAP Reading for Daemon\n"));
+			WRITE(debugFD, "MAP Reading for Daemon\n", sizeof("MAP Reading for Daemon\n"));
 			// cerr<<"MAP Reading for Daemon "<<endl;
 		}
 
+		if(goldmap->rows == 26)
+		{
+				WRITE(debugFD, "row count is 26\n", sizeof("row count is 26\n"));
+		}
+
+	//	WRITE(debugFD, &goldmap->rows,sizeof(int));
 
 
 		gm->daemonID = getpid();
 
-		local_mapcopy = new unsigned char[rows*cols+sizeof(char)];
+		local_mapcopy = new unsigned char[(rows*cols)];
 
 		//unsigned char local_mapcopy[rows*cols];
 
@@ -736,11 +749,11 @@ void create_server_daemon()
 
 			if(local_mapcopy[i] == 0)
 			{
-				write(debugFD," ",sizeof(" "));
+				WRITE(debugFD," ",sizeof(" "));
 			}
 			else if(local_mapcopy[i] == G_WALL)
 			{
-					write(debugFD,"*",sizeof("*"));
+					WRITE(debugFD,"*",sizeof("*"));
 			}
 		}
 
@@ -749,7 +762,7 @@ void create_server_daemon()
 //
 // 		for(int i = 0; i < (r * c); ++i)
 // {
-//   write(fd, &localCopy[i],sizeof(localCopy[i]));
+//   WRITE(fd, &localCopy[i],sizeof(localCopy[i]));
 // }
 
 
@@ -796,12 +809,12 @@ void create_server_daemon()
 //----------------------------------------------------------------------------//
 	// while(1)
 	// {
-	// 	write(debugFD, "Daemon is running!\n", sizeof("Daemon is running!\n"));
+	// 	WRITE(debugFD, "Daemon is running!\n", sizeof("Daemon is running!\n"));
 	// 	sleep(2);
 	// }
 
 
-	int sockfd; //file descriptor for the socket
+//	int sockfd; //file descriptor for the socket
 	int status; //for error checking
 
 	//change this # between 2000-65k before using
@@ -848,13 +861,13 @@ void create_server_daemon()
 
 	struct sockaddr_in client_addr;
 	socklen_t clientSize=sizeof(client_addr);
-	int new_sockfd;
-	if((new_sockfd=accept(sockfd, (struct sockaddr*) &client_addr, &clientSize))==-1)
-	{
-		perror("accept");
-		exit(1);
-	}
+	//int new_sockfd;
+	do{
+		new_sockfd=accept(sockfd, (struct sockaddr*) &client_addr, &clientSize);
+	}while(new_sockfd==-1 && errno==EINTR);
 
+
+	WRITE(debugFD,"accepted\n",sizeof("accepted\n"));
 	//read & write to the socket
 	char buffer[100];
 	memset(buffer,0,100);
@@ -862,50 +875,133 @@ void create_server_daemon()
 	/*
 	* listen to client
 	**/
-	if((n=READ(new_sockfd, buffer, 99))==-1)
-	{
-		perror("read is failing");
-		printf("n=%d\n", n);
-	}
-
-	 write(debugFD, buffer, sizeof(buffer));
-
-	 write(debugFD, &rows, sizeof(int));
-
-	 WRITE(new_sockfd,&rows,sizeof(rows));
-	 WRITE(new_sockfd,&cols,sizeof(cols));
-
-	// unsigned char* mptr = local_mapcopy;
-	//
-	// for(int i = 0 ; i < rows* cols;i++)
+	// if((n=READ(new_sockfd, buffer, 99))==-1)
 	// {
-	// 	write(new_sockfd,&mptr[i],sizeof(mptr[i]));
+	// 	perror("read is failing");
+	// 	printf("n=%d\n", n);
 	// }
 
+	 //WRITE(debugFD, buffer, sizeof(buffer));
 
-	const char* message="These are the times that try men's souls.";
-	WRITE(new_sockfd, message, strlen(message));
+	 if(goldmap->rows == 26)
+	 {
+		 	WRITE(debugFD, "12344\n", sizeof("12344\n"));
+	 }
+	 if(goldmap->cols == 80)
+	 {
+		 	WRITE(debugFD, "fdxcghjk\n", sizeof("fdxcghjk\n"));
+	 }
+
+	// rows = 26;
+
+	  WRITE(new_sockfd,&goldmap->rows,sizeof(goldmap->rows));
+	  WRITE(new_sockfd,&goldmap->cols,sizeof(goldmap->cols));
+
+	unsigned char* mptr = local_mapcopy;
+
+	for(int i = 0 ; i < goldmap->rows*goldmap->cols;i++)
+	{
+		WRITE(new_sockfd,&mptr[i],sizeof(mptr[i]));
+	}
+
+	//unsigned char byte = G_SOCKPLR;
+
+	//WRITE(socket_fd, &byte, 1);
+	WRITE(new_sockfd,&byte,sizeof(byte));
+
+
+		while(1)
+		{
+
+			READ(sockfd,&listen_var,sizeof(unsigned char));
+
+			if(listen_var & G_SOCKPLR)
+			{
+				  unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2,G_PLR3, G_PLR4};
+				  for(int i=0; i<5; ++i) //loop through the player bits
+				  {
+				    // If player bit is on and shared memory ID is zero,
+				    // a player (from other computer) has joined:
+				    if(listen_var & player_bit[i] && gm->player_pid[i]==0)
+				    {
+						gm->player_pid[i] = getpid();//goldmap->daemonID;
+						}
+						else if(!(listen_var & player_bit[i]) && gm->player_pid[i]!=0)
+				    {
+								gm->player_pid[i] = 0;
+						}
+				  }
+				  if(listen_var == G_SOCKPLR)
+				    {
+							//no players are left in the game.  Close and unlink the shared memory.
+					    //Close and unlink the semaphore.  Then exit the program.
+							kill(gm->daemonID, SIGHUP);
+							//sighup call kr
+					}
+				}
+
+			else if (listen_var == 0)
+			{
+
+				short  pvec_first_read,pvec_size;
+				unsigned char pvec_second_read;
+				//sig user 1 bheja
+				READ(sockfd,&pvec_size,sizeof(pvec_size));
+				for(short i = 0; i < pvec_size;i++)
+				{
+					READ(sockfd,&pvec_first_read,sizeof(short));
+					READ(sockfd,&pvec_second_read,sizeof(unsigned char));
+					gm->map[pvec_first_read] = pvec_second_read;
+					local_mapcopy[pvec_first_read] = pvec_second_read;
+				}
+
+
+
+			}
+			// else if(msg wala condition)
+			// {
+			// // need to write
+			// }
+
+			close(sockfd);
+
+		}
+
+
+	// const char* message="These are the times that try men's souls.";
+	// WRITE(new_sockfd, message, strlen(message));
 	close(new_sockfd);
 
 ////////////////////////////////SOCKET END//////////////////////////////////////
 }
 
+
 void client(string client_ip)
 {
-
+pipe(pipefd);
 ////////////////////////////////CLIENT DAEMON START////////////////////////////////////
 	if(fork()>0)
   {
-    //I'm the parent, leave the function
-    return;
+		close(pipefd[1]); //close write, parent only needs read
+    int val;
+    READ(pipefd[0], &val, sizeof(val));
+    if(val==1)
+      WRITE(1, "Success!\n", sizeof("Success!\n"));
+    else
+      WRITE(1, "Failure!\n", sizeof("Failure!\n"));
+    return ;
   }
-
   if(fork()>0)
     exit(0);
   if(setsid()==-1)
     exit(1);
-  for(int i; i< sysconf(_SC_OPEN_MAX); ++i)
-    close(i);
+  for(int i = 0; i< sysconf(_SC_OPEN_MAX); ++i)
+	{
+		if(i!=pipefd[1])//close everything, except write
+      close(i);
+	}
+
+
   open("/dev/null", O_RDWR); //fd 0
   open("/dev/null", O_RDWR); //fd 1
   open("/dev/null", O_RDWR); //fd 2
@@ -913,12 +1009,12 @@ void client(string client_ip)
   chdir("/");
 
 	debugFD = open("/home/akshay/private_git_611/611/mypipe",O_WRONLY);
-	write(debugFD,"client deamon running\n", sizeof("client deamon running\n"));
+	WRITE(debugFD,"client deamon running\n", sizeof("client deamon running\n"));
 ////////////////////////////////DAEMON END////////////////////////////////////
 
 ////////////////////////////////CLIENT SOCKET///////////////////////////////////
 
-int sockfd; //file descriptor for the socket
+//int sockfd; //file descriptor for the socket
 int status; //for error checking
 
 //change this # between 2000-65k before using
@@ -931,7 +1027,7 @@ hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
 
 struct addrinfo *servinfo;
 //instead of "localhost", it could by any domain name
-if((status=getaddrinfo("192.168.98.196", portno, &hints, &servinfo))==-1)
+if((status=getaddrinfo("192.168.98.211", portno, &hints, &servinfo))==-1)
 {
 	fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
 	exit(1);
@@ -949,74 +1045,124 @@ freeaddrinfo(servinfo);
 const char* message="One small step for (a) man, one large  leap for Mankind";
 //  const char* message = "Todd Gibson yudi jagani";
 int n ;
-if((n=WRITE(sockfd, message, strlen(message)))==-1)
-{
-	perror("write");
-	exit(1);
-}
-
-//WRITE(sockfd, "1234567890", 10);
 
 
-int rows=0,cols=0;
-
- READ(sockfd,&rows,sizeof(int));
- READ(sockfd,&cols,sizeof(int));
-
-write(debugFD,&rows,sizeof(rows));
-
-int client_mapSize = rows * cols;
-
-
-std::cerr << "client_mapSize :"<<client_mapSize << std::endl;
-//printf("client wrote %d characters\n", n);
-char buffer[100];
-memset(buffer, 0, 100);
-READ(sockfd, buffer, 99);
-//READ(sockfd, buffer, 99);
-write(debugFD, buffer, sizeof(buffer));
-printf("%s\n", buffer);
-
-
-int client_shared_mem=shm_open("/Client_Shared_MemAG",O_RDWR|O_CREAT,S_IWUSR|S_IRUSR);
-ftruncate(client_shared_mem ,client_mapSize + sizeof(GameBoard));
-client_goldmap = (GameBoard*) mmap(0,client_mapSize + sizeof(GameBoard),PROT_WRITE,MAP_SHARED,client_shared_mem,0);
-
-client_goldmap->rows = rows;
-client_goldmap->cols = cols;
-client_goldmap->daemonID = getpid();
-//unsigned char* mptr = clie
-unsigned char read_from_server;
-
-for(int i = 0; i < rows*cols;i++)
-{
-	read(sockfd, &read_from_server,1);
-	client_goldmap->map[i] = read_from_server;
-}
-
-write(debugFD,"printing client local copy \n",sizeof("printing client local copy \n"));
-
-
-for(int i =0;i < rows*cols ; i++)
-{
-
-	if(client_goldmap->map[i] == 0)
-	{
-		write(debugFD," ",sizeof(" "));
-	}
-	else if(client_goldmap->map[i] == G_WALL)
-	{
-			write(debugFD,"*",sizeof("*"));
-	}
-}
+ int rows1=0,cols1=0;
 //
+  READ(sockfd,&rows1,sizeof(int));
+  READ(sockfd,&cols1,sizeof(int));
+//
+ //WRITE(debugFD,&rows,sizeof(rows));
+
+  if (rows1 == 26)
+  {
+  	WRITE(debugFD,"Rows are printing correctly\n",sizeof("Rows are printing correctly\n"));
+
+  }
+
+	if (cols1 == 80)
+  {
+  	WRITE(debugFD,"Cols are printing correctly\n",sizeof("Cols are printing correctly\n"));
+
+  }
 
 
-close(sockfd);
+	localClient = new unsigned char[(rows1 * cols1)];
+ for(int i = 0; i < rows1*cols1;i++)
+ {
+	 unsigned char read_from_server;
+ 	 READ(sockfd, &read_from_server,sizeof(read_from_server));
+ 	 localClient[i] = read_from_server;
+ }
 
 
+	int client_mapSize = rows1 * cols1;
+
+//SEM OPEN
+
+GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_CREAT,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
+ int client_shared_mem=shm_open("/GameBoard_Mem",O_RDWR|O_CREAT,S_IWUSR|S_IRUSR);
+ ftruncate(client_shared_mem ,client_mapSize + sizeof(GameBoard));
+ client_goldmap = (GameBoard*) mmap(0,client_mapSize + sizeof(GameBoard),PROT_WRITE,MAP_SHARED,client_shared_mem,0);
+
+//
+ client_goldmap->rows = rows1;
+ client_goldmap->cols = cols1;
+ client_goldmap->daemonID = getpid();
+//unsigned char* mptr = clie
 
 
+for(int i = 0; i < rows1*cols1;i++)
+{
+	client_goldmap->map[i] = localClient[i];
+}
+
+	int val=1;
+  WRITE(pipefd[1], &val, sizeof(val));
+
+	unsigned char client_byte;
+	READ(sockfd, &client_byte,sizeof(client_byte));
+
+  unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2, G_PLR3, G_PLR4};
+	for(int i = 0; i < 5 ; i ++)
+	{
+
+		if(client_byte & player_bit[i] )
+		{
+			client_goldmap->player_pid[i] = client_goldmap->daemonID; //need to check
+		}
+	}
+
+
+	while(1)
+	{
+
+		READ(sockfd,&listen_var1,sizeof(unsigned char));
+
+		if(listen_var1 & G_SOCKPLR)
+		{
+			  unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2,G_PLR3, G_PLR4};
+			  for(int i=0; i<5; ++i) //loop through the player bits
+			  {
+			    // If player bit is on and shared memory ID is zero,
+			    // a player (from other computer) has joined:
+			    if(listen_var1 & player_bit[i] && client_goldmap->player_pid[i]==0)
+			    {
+						client_goldmap->player_pid[i] = getpid();//goldmap->daemonID;
+					}
+					else if(!(listen_var1 & player_bit[i]) && client_goldmap->player_pid[i]!=0)
+			    {
+						client_goldmap->player_pid[i] = 0;
+					}
+			  }
+			  if(listen_var1 == G_SOCKPLR)
+			    {
+						//no players are left in the game.  Close and unlink the shared memory.
+				    //Close and unlink the semaphore.  Then exit the program.
+						kill(client_goldmap->daemonID, SIGHUP);
+						//sighup call kr
+				}
+			}
+
+		else if (listen_var1 == 0)
+		{
+			 short pvec_first_read;
+			unsigned char pvec_second_read;
+			//sig user 1 bheja
+			READ(sockfd,&pvec_first_read,sizeof(short));
+			READ(sockfd,&pvec_second_read,sizeof(unsigned char));
+
+			client_goldmap->map[pvec_first_read] == pvec_second_read;
+
+		}
+		// else if(msg wala condition)
+		// {
+		// // need to write
+		// }
+
+		close(sockfd);
+
+	}
 
 
 
@@ -1024,17 +1170,45 @@ close(sockfd);
 
 }
 
-
-
-
-
-
-
 void sighup_handeler(int z)
 {
-	sem_close(GameBoard_Sem);
-	sem_unlink("/GameBoard_Sem");
-	shm_unlink("/GameBoard_Mem");
+
+		SockPlayer = G_SOCKPLR;
+
+		for(int i=0; i<5; ++i)
+		  if(gm->player_pid[i]!=0)
+		    switch(i)
+		    {
+		      case 0:
+		        SockPlayer|=G_PLR0;
+		        break;
+		      case 1:
+		        SockPlayer|=G_PLR1;
+		        break;
+					case 2:
+			      SockPlayer|=G_PLR2;
+			      break;
+					case 3:
+			      SockPlayer|=G_PLR3;
+			      break;
+					case 4:
+			      SockPlayer|=G_PLR4;
+			      break;
+		    }
+
+				byte = SockPlayer;
+
+				WRITE(new_sockfd, &SockPlayer,sizeof(SockPlayer));
+
+
+	if(SockPlayer == G_SOCKPLR)
+	{
+		sem_close(GameBoard_Sem);
+		sem_unlink("/GameBoard_Sem");
+		shm_unlink("/GameBoard_Mem");
+	}
+
+
 }
 
 
@@ -1058,12 +1232,19 @@ void sigusr1_handeler(int z)
     }
   }
 
-
-
-	// if (pvec.size() > 0 )
-	// {
-	// 	/// socket write : Socket map
-	// }
+	int zero = 0;
+	short pvec_size = pvec.size();
+  if (pvec.size() > 0 )
+	{
+		WRITE(new_sockfd,&zero, sizeof(int));
+		WRITE(new_sockfd,&pvec_size,sizeof(pvec_size));
+		for(short i = 0; i < pvec.size(); ++i)
+		{
+			WRITE(new_sockfd,&pvec[i].first,sizeof(short));
+			WRITE(new_sockfd,&pvec[i].second,sizeof(unsigned char));
+	 	}
+			/// socket write : Socket map
+  }
 
 }
 
