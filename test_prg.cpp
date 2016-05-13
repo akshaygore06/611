@@ -31,19 +31,31 @@
 #include <stdio.h> //for fprintf, stderr, etc.
 #include <stdlib.h> //for exit
 #include "fancyRW.h"
-
+#include <cassert>
+#include <stdarg.h>
 
 using namespace std;
+
+//The macro that contains the full pathname to the named pipe
+//#define NAMEDPIPE "/home/tgibson/studentwork/gore/err_out"
+#define NAMEDPIPE "/home/akshay/private_git_611/611/mypipe"
+//The macro for writing debugging messages to a named pipe
+#define DEBUG(msg, ...) do{sprintf(debugStr,msg, ##__VA_ARGS__); WRITE(debugFD,debugStr, strlen(debugStr));}while(0)
+
+//used by DEBUG macro
+char debugStr[100];
+int debugFD;
+
 
 /** GameBoard Structure for the Goldchase */
 
 struct GameBoard {
-	int rows; //4 bytes
-	int cols; //4 bytes
-	pid_t player_pid[5];
-	unsigned char player;
-	int daemonID;
-	unsigned char map[0];
+  int rows; //4 bytes
+  int cols; //4 bytes
+  pid_t player_pid[5];
+  unsigned char player;
+  int daemonID;
+  unsigned char map[0];
 };
 
 /** Global Variables **/
@@ -52,21 +64,18 @@ mqd_t readqueue_fd; //message queue file descriptor
 struct mq_attr mq_attributes;
 string mqueue_name[5];
 bool sig=false;
-int debugFD;
 GameBoard* goldmap;
-//GameBoard* gm;
-//GameBoard* client_goldmap;
+//unsigned char sb;
 int client_shared_mem;
-unsigned char* localClient;
 int fd;
 unsigned char* local_mapcopy;
 sem_t* GameBoard_Sem;
 int pipefd[2];
 int NumberOfRows = -1;
 int NumberOfColumns = -1;
-//unsigned char SockPlayer;
 unsigned char byte,listen_var,listen_var1;
 int sockfd,new_sockfd;
+int status;
 /** Function Declaration */
 int insertGold(unsigned char*,int ,int ,int);
 int insertPlayer(unsigned char*,unsigned char ,int ,int);
@@ -80,827 +89,851 @@ void create_server_daemon();
 void sigusr1_handeler(int z);
 void sigusr2_handeler(int z);
 void sighup_handeler(int z);
-//void sigusr1_handeler_client(int z);
-//void sigusr2_handeler_client(int z);
-//void sighup_handeler_client(int z);
 void client_deamon(string);
 void continuous_listen();
-
+//unsigned char	SockPlayer1;
+unsigned char c;
 int main(int argc, char* argv[])
 {
-	//string client_ip = "localhost" ;
-		if(argc == 2)
-		{
-			client_deamon("192.168.98.219");
-		}
+  debugFD =  open(NAMEDPIPE,O_WRONLY);
+  assert(debugFD!=-1); //go no further if we couldn't open the named pipe
+
+  //string client_ip = "localhost" ;
+  DEBUG("I am here-01\n");
+
+  /** Variable Declaration */
+  ifstream inputFile;
+  string Line,CompleteMapString= "";
+  int No_Of_Gold,mapSize;
+  bool firstline = true;
+  bool collen_flag = true;
+
+  char* theMine;
+  const char* ptr;
+  unsigned char* mp;
+  unsigned char* client_mp;
+  int player_position;
+  unsigned char current_player;
+  pid_t current_pid;
+  string msgString;
 
 
-	/** Variable Declaration */
-	ifstream inputFile;
-	string Line,CompleteMapString= "";
-	int No_Of_Gold,mapSize;
-	bool firstline = true;
-	bool collen_flag = true;
+  mqueue_name[0] = "/agore_player0_mq";
+  mqueue_name[1] = "/agore_player1_mq";
+  mqueue_name[2] = "/agore_player2_mq";
+  mqueue_name[3] = "/agore_player3_mq";
+  mqueue_name[4] = "/agore_player4_mq";
 
-	char* theMine;
-	const char* ptr;
-	unsigned char* mp;
-	unsigned char* client_mp;
-	int player_position;
-	unsigned char current_player;
-	pid_t current_pid;
-	string msgString;
+  /** Signal */
+  struct sigaction sigactionObject;
+  sigactionObject.sa_handler=handle_interrupt;
+  sigemptyset(&sigactionObject.sa_mask);
+  sigactionObject.sa_flags=0;
+  sigactionObject.sa_restorer=NULL;
 
+  //beginning of main, game process handles SIGUSR1 as handle_interrupt
+  sigaction(SIGUSR1, &sigactionObject, NULL);
+  struct sigaction exit_handler;
+  exit_handler.sa_handler=clean_up;
+  sigemptyset(&exit_handler.sa_mask);
+  exit_handler.sa_flags=0;
+  sigaction(SIGINT, &exit_handler, NULL);
+  //sigaction(SIGHUP, &exit_handler, NULL);
+  sigaction(SIGTERM, &exit_handler, NULL);
 
-mqueue_name[0] = "/agore_player0_mq";
-mqueue_name[1] = "/agore_player1_mq";
-mqueue_name[2] = "/agore_player2_mq";
-mqueue_name[3] = "/agore_player3_mq";
-mqueue_name[4] = "/agore_player4_mq";
+  //make sure we can handle the SIGUSR2
+  //message when the message queue
+  //notification sends the signal
+  struct sigaction action_to_take;
+  action_to_take.sa_handler= read_message;	//handle with this function interrupt
+  sigemptyset(&action_to_take.sa_mask);//zero out the mask (allow any signal to)
+  action_to_take.sa_flags=0;//tell how to handle SIGINT
+  sigaction(SIGUSR2, &action_to_take, NULL);// struct mq_attr mq_attributes;
+  mq_attributes.mq_flags=0;
+  mq_attributes.mq_maxmsg=10;
+  mq_attributes.mq_msgsize=120;
 
-	/** Signal */
-	struct sigaction sigactionObject;
-	sigactionObject.sa_handler=handle_interrupt;
-	sigemptyset(&sigactionObject.sa_mask);
-	sigactionObject.sa_flags=0;
-	sigactionObject.sa_restorer=NULL;
+  if(argc == 2)
+  {
+    GameBoard_Sem = sem_open("/GameBoard_Sem",O_CREAT|O_RDWR|O_EXCL,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
 
-	sigaction(SIGUSR1, &sigactionObject, NULL);
-	struct sigaction exit_handler;
-	exit_handler.sa_handler=clean_up;
-	sigemptyset(&exit_handler.sa_mask);
-	exit_handler.sa_flags=0;
-	sigaction(SIGINT, &exit_handler, NULL);
-	//sigaction(SIGHUP, &exit_handler, NULL);
-	sigaction(SIGTERM, &exit_handler, NULL);
+    if( GameBoard_Sem != SEM_FAILED)
+    {
+      client_deamon(argv[1]);
+    }
+  }
 
-	//make sure we can handle the SIGUSR2
-	//message when the message queue
-	//notification sends the signal
-	struct sigaction action_to_take;
-	action_to_take.sa_handler= read_message;	//handle with this function interrupt
-	sigemptyset(&action_to_take.sa_mask);//zero out the mask (allow any signal to)
-	action_to_take.sa_flags=0;//tell how to handle SIGINT
-	sigaction(SIGUSR2, &action_to_take, NULL);// struct mq_attr mq_attributes;
-	mq_attributes.mq_flags=0;
-	mq_attributes.mq_maxmsg=10;
-	mq_attributes.mq_msgsize=120;
+  //if(argc != 2)
+  //{
+  /** Reading map file */
+  inputFile.open("mymap.txt");
+  while(inputFile != '\0')
+  {
+    if(firstline == true)
+    {
+      getline(inputFile,Line);
+      No_Of_Gold = stoi(Line);
+      firstline = false;
+    }
+    else
+    {
+      getline(inputFile,Line);
+      CompleteMapString += Line;
+      NumberOfRows++;
+      //MAP_ROW++;
+      if(collen_flag == true)
+      {
+        NumberOfColumns = Line.length();
+        collen_flag =  false;
+      }
+    }
+  }
+  inputFile.close();
 
-if(argc != 2)
-{
-	/** Reading map file */
-	inputFile.open("mymap.txt");
-	while(inputFile != '\0')
-	{
-		if(firstline == true)
-		{
-			getline(inputFile,Line);
-			No_Of_Gold = stoi(Line);
-			firstline = false;
-		}
-		else
-		{
-			getline(inputFile,Line);
-			CompleteMapString += Line;
-			NumberOfRows++;
-			//MAP_ROW++;
-			if(collen_flag == true)
-			{
-				NumberOfColumns = Line.length();
-				collen_flag =  false;
-			}
-		}
-	}
-	inputFile.close();
-
-	mapSize = NumberOfRows * NumberOfColumns;
-}
-/*
-	argv checking
-*/
+  mapSize = NumberOfRows * NumberOfColumns;
+  //}
+  /*
+     argv checking
+     */
 
 
-	/** Creating semaphore */
+  /** Creating semaphore */
 
 
-	GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_EXCL,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
+  GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_EXCL,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
 
-	if( GameBoard_Sem == SEM_FAILED) /** Code for First Player */
-	{
-		GameBoard_Sem = sem_open("/GameBoard_Sem",O_CREAT|O_EXCL|O_RDWR ,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);///create a semaphore
+  if( GameBoard_Sem == SEM_FAILED) /** Code for First Player */
+  {
+    GameBoard_Sem = sem_open("/GameBoard_Sem",O_CREAT|O_EXCL|O_RDWR ,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);///create a semaphore
 
-		/** Code for Shared memory creation*/
+    /** Code for Shared memory creation*/
 
-		sem_wait(GameBoard_Sem);
-		fd = shm_open("/GameBoard_Mem", O_CREAT|O_EXCL|O_RDWR , S_IRUSR | S_IWUSR);
-		goldmap = (GameBoard*)mmap(NULL, NumberOfRows*NumberOfColumns+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    sem_wait(GameBoard_Sem);
+    fd = shm_open("/GameBoard_Mem", O_CREAT|O_EXCL|O_RDWR , S_IRUSR | S_IWUSR);
+    goldmap = (GameBoard*)mmap(NULL, NumberOfRows*NumberOfColumns+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 
-		if(ftruncate(fd,mapSize + sizeof(GameBoard)) != 0 )
-		{
-			perror("Truncate Memory");
-		}
+    if(ftruncate(fd,mapSize + sizeof(GameBoard)) != 0 )
+    {
+      perror("Truncate Memory");
+    }
 
-		if(goldmap ==  MAP_FAILED)
-		{
-			perror("MMaP Error :");
-		}
+    if(goldmap ==  MAP_FAILED)
+    {
+      perror("MMaP Error :");
+    }
 
-		goldmap->rows = NumberOfRows;
-		goldmap->cols = NumberOfColumns;
+    goldmap->rows = NumberOfRows;
+    goldmap->cols = NumberOfColumns;
+    goldmap->daemonID = 0;
+    current_player = G_PLR0;
 
-		current_player = G_PLR0;
+
+    //Convert the ASCII bytes into bit fields drawn from goldchase.h
+    theMine = &CompleteMapString[0];
+    ptr = theMine;
+    mp = goldmap->map;
+    while(*ptr!='\0')
+    {
+      if(*ptr==' ')      *mp=0;
+      else if(*ptr=='*') *mp=G_WALL; //A wall
+      ++ptr;
+      ++mp;
+    }
+
+    /** Insert GOLD into the shared memory */
+    insertGold(goldmap->map,No_Of_Gold,NumberOfRows,NumberOfColumns);
+
+    /** Insert First player into the shared memory */
+    player_position = insertPlayer(goldmap->map,current_player,NumberOfRows,NumberOfColumns);
+
+    for(int i = 0; i < 5; i++)
+    {
+      goldmap->player_pid[i] = 0;
+    }
+
+    goldmap->player_pid[0] = getpid();
+
+    readQueue(mqueue_name[0]);   // read mqueue of first player
+    sem_post(GameBoard_Sem);
+
+  }
+  else  /** Code for Subsequent Players*/
+  {
+    GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_EXCL,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
+
+    int fdiscriptor = shm_open("/GameBoard_Mem", O_RDWR|O_EXCL , S_IRUSR | S_IWUSR);
+    if(fdiscriptor == -1)
+    {
+      cerr<<"second FD "<<endl;
+    }
+
+    // read shared map
+    int map_rows, map_columns ;
+    READ(fdiscriptor, &map_rows, sizeof(int));
+    READ(fdiscriptor, &map_columns, sizeof(int));
+
+    goldmap = (GameBoard*)mmap(NULL, map_rows*map_columns+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, fdiscriptor, 0);
+    if(goldmap == MAP_FAILED )
+    {
+      cerr<<"MAP Reading for Else Part "<<endl;
+    }
+
+    NumberOfColumns = goldmap->cols;
+    NumberOfRows = goldmap->rows;
+
+    // setting players pid
+    int iter=0;
+    int plr[5] = {G_PLR0,G_PLR1,G_PLR2,G_PLR3,G_PLR4};
+
+    for(iter = 0 ; iter < 5;iter++)
+    {
+      if( goldmap->player_pid[iter] == 0)
+      {
+        current_player = plr[iter];
+        goldmap->player_pid[iter] = getpid();
+        //		goldmap->daemonID = 0;
+        readQueue(mqueue_name[iter]);
+        break;
+      }
+    }
+    if(iter == 5)
+    {
+      cout << "No more players allowed" <<endl;
+      return 0;
+    }
+    player_position = insertPlayer(goldmap->map,current_player,NumberOfRows,NumberOfColumns);
+    DEBUG("before sighup player insert\n");
+    kill(goldmap->daemonID,SIGHUP); // need to check
+
+  }
 
 
-		//Convert the ASCII bytes into bit fields drawn from goldchase.h
-		theMine = &CompleteMapString[0];
-		ptr = theMine;
-		mp = goldmap->map;
-		while(*ptr!='\0')
-		{
-			if(*ptr==' ')      *mp=0;
-			else if(*ptr=='*') *mp=G_WALL; //A wall
-			++ptr;
-			++mp;
-		}
-
-		/** Insert GOLD into the shared memory */
-		insertGold(goldmap->map,No_Of_Gold,NumberOfRows,NumberOfColumns);
-
-		/** Insert First player into the shared memory */
-		player_position = insertPlayer(goldmap->map,current_player,NumberOfRows,NumberOfColumns);
-
-		for(int i = 0; i < 5; i++)
-		{
-			goldmap->player_pid[i] = 0;
-		}
-
-		goldmap->daemonID =0;
-		goldmap->player_pid[0] = getpid();
-
-		readQueue(mqueue_name[0]);   // read mqueue of first player
-		sem_post(GameBoard_Sem);
-
-	}
-	else  /** Code for Subsequent Players*/
-	{
-		GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_EXCL,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
-
-		int fdiscriptor = shm_open("/GameBoard_Mem", O_RDWR|O_EXCL , S_IRUSR | S_IWUSR);
-		if(fdiscriptor == -1)
-		{
-			cerr<<"second FD "<<endl;
-		}
-
-		// read shared map
-		int map_rows, map_columns ;
-		READ(fdiscriptor, &map_rows, sizeof(int));
-		READ(fdiscriptor, &map_columns, sizeof(int));
-
-		goldmap = (GameBoard*)mmap(NULL, map_rows*map_columns+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, fdiscriptor, 0);
-		if(goldmap == MAP_FAILED )
-		{
-			cerr<<"MAP Reading for Else Part "<<endl;
-		}
-
-		NumberOfColumns = goldmap->cols;
-		NumberOfRows = goldmap->rows;
-
-		if( goldmap->player_pid[0] == 0)// && (G_PLR0 & goldmap->player)==0)
-		{
-			current_player = G_PLR0;
-			goldmap->player_pid[0] = getpid();
-		//		goldmap->daemonID = 0;
-			readQueue(mqueue_name[0]);
-		}
-		else if (goldmap->player_pid[1] == 0)
-		{
-			current_player = G_PLR1;
-			goldmap->player_pid[1] = getpid();
-			readQueue(mqueue_name[1]);
-		}
-		else if (goldmap->player_pid[2] == 0)
-		{
-			current_player = G_PLR2;
-
-			goldmap->player_pid[2] =getpid();
-		readQueue(mqueue_name[2]);
-		}
-		else if (goldmap->player_pid[3] == 0)
-		{
-			current_player = G_PLR3;
-			goldmap->player_pid[3] = getpid();
-			readQueue(mqueue_name[3]);
-
-		}
-		else if (goldmap->player_pid[4] == 0)
-		{
-			current_player = G_PLR4;
-			goldmap->player_pid[4] = getpid();
-			readQueue(mqueue_name[4]);
-		}
-		else
-		{
-			cout << "No more players allowed" <<endl;
-			return 0;
-		}
-
-		player_position = insertPlayer(goldmap->map,current_player,NumberOfRows,NumberOfColumns);
-
-	}
-
-	sem_wait(GameBoard_Sem);
-	goldmap->player |= current_player;
-	sem_post(GameBoard_Sem);
+  sem_wait(GameBoard_Sem);
+  goldmap->player |= current_player;
+  sem_post(GameBoard_Sem);
 
   //goldmap->daemonID =0;
-	if(goldmap->daemonID == 0)
-	{
-			//cout << "IS It??" << endl;
-			create_server_daemon();
-	}
-	 if(goldmap->daemonID != 0 )
-	{
-		kill(goldmap->daemonID,SIGHUP);
-	}
 
-	Map goldMine(goldmap->map,goldmap->rows,goldmap->cols);
+  Map goldMine(goldmap->map,goldmap->rows,goldmap->cols);
 
 
-	mapptr = &goldMine;
+  mapptr = &goldMine;
 
-	refreshScreen(goldmap);
-
-
-
-	/** Code of Movement*/
+  refreshScreen(goldmap);
 
 
-	int currentColumn,currentRow;
-	int a=0;
-	bool running_flag =  true,realGoldFound=false, sendSignal = false;
-
-	while(running_flag && sig==false)
-	{
-		a = goldMine.getKey();
-		currentRow = player_position / NumberOfColumns;
-		currentColumn = player_position % NumberOfColumns;
-
-		if(currentColumn == 0)
-		{
-			currentColumn = NumberOfColumns;
-		}
-
-		if( a == 104 ) //  'h' Key for Left Movement
-		{
-
-			if(realGoldFound == true && currentColumn-1 == 0)
-			{
-				sem_wait(GameBoard_Sem);
-				goldmap->map[player_position] &= ~current_player;
-				sem_post(GameBoard_Sem);
-				break;
-			}
-			if(goldmap->map[player_position-1] != G_WALL )
-			{
-				goldmap->map[player_position] &= ~current_player;
-				player_position = player_position -1;
-				goldmap->map[player_position]  |= current_player;
-				sendSignal = true;
-			}
-		}
-		else if( a == 108 ) /// 'l' Key for Right Movement
-		{
-			if(realGoldFound == true && currentColumn == goldmap->cols -1)
-			{
-				sem_wait(GameBoard_Sem);
-				goldmap->map[player_position] &= ~current_player;
-				sem_post(GameBoard_Sem);
-				break;
-			}
-			if(goldmap->map[player_position+1] != G_WALL )//| currentColumn != 0 )
-			{
-				goldmap->map[player_position] &= ~current_player;
-				player_position = player_position+1;
-				goldmap->map[player_position]  |= current_player;
-				sendSignal = true;
-			}
-		}
-		else if( a == 106 ) // 'j' Key for Down Movement
-		{
-			if(realGoldFound == true && currentRow >= NumberOfRows-1 )
-			{
-				sem_wait(GameBoard_Sem);
-				goldmap->map[player_position] &= ~current_player;
-				sem_post(GameBoard_Sem);
-				break;
-			}
-			if(goldmap->map[player_position+NumberOfColumns] != G_WALL  && currentRow < NumberOfRows-1 )
-			{
-				goldmap->map[player_position] &= ~current_player;
-				player_position = player_position+NumberOfColumns;
-				goldmap->map[player_position]  |= current_player;
-				sendSignal = true;
-			}
-		}
-		else if( a == 107 ) // 'k' Key for Upward Movement
-		{
-			if(realGoldFound == true && player_position-NumberOfColumns <= 0)
-			{
-				sem_wait(GameBoard_Sem);
-				goldmap->map[player_position] &= ~current_player;
-				sem_post(GameBoard_Sem);
-				break;
-			}
-			if(player_position-NumberOfColumns > 0)
-			{
-				if(goldmap->map[player_position-NumberOfColumns] != G_WALL)
-				{
-
-					goldmap->map[player_position] &= ~current_player;
-					player_position = player_position-NumberOfColumns;
-					goldmap->map[player_position]  |= current_player;
-					sendSignal = true;
-				}
-			}
-		}
-		else if(a == 81)   /// Q for quit
-		{
-			running_flag = false;
-
-			sem_wait(GameBoard_Sem);
-			goldmap->player--;
-			goldmap->map[player_position] &= ~current_player;
-			sem_post(GameBoard_Sem);
+  /** Code of Movement*/
 
 
-		}
-		else if(a == 77 || a == 109) // key 'M' or 'm' for Message sending
-		{
-			string rank;
-			unsigned int mask=0;
-			for(int i = 0; i < 5;i++)
-			{
-				if(goldmap->player_pid[i] != 0)
-				{
-					switch (i) {
-						case 0:
-							mask |= G_PLR0;
-							break;
-						case 1:
-							mask |= G_PLR1;
-							break;
-						case 2:
-							mask |= G_PLR2;
-							break;
-						case 3:
-							mask |= G_PLR3;
-							break;
-						case 4:
-							mask |= G_PLR4;
-							break;
-						}
-				}
-			}
+  int currentColumn,currentRow;
+  int a=0;
+  bool running_flag =  true,realGoldFound=false, sendSignal = false;
 
-			unsigned int destination_player;
-			destination_player = mapptr->getPlayer(mask);
-			int q_index=0;
+  if(goldmap->daemonID == 0)
+  {
+    DEBUG("server created\n");
+    create_server_daemon();
 
-			if (destination_player == G_PLR0)
-			{
-				q_index = 0;
-			}
-			else if (destination_player == G_PLR1)
-			{
-				q_index = 1;
-			}
-			else if(destination_player == G_PLR2)
-			{
-				q_index = 2;
-			}
-			else if(destination_player == G_PLR3)
-			{
-				q_index = 3;
-			}
-			else if(destination_player == G_PLR4)
-			{
-				q_index = 4;
-			}
-			if(current_player == G_PLR0)
-			{
-				rank="Player 1 says: ";
-			}
-			else if(current_player == G_PLR1)
-			{
-				rank="Player 2 says: ";
-			}
-			else if(current_player == G_PLR2)
-			{
-				rank="Player 3 says: ";
-			}
-			else if(current_player == G_PLR3)
-			{
-				rank="Player 4 says: ";
-			}
-			else if(current_player == G_PLR4)
-			{
-				rank="Player 4 says: ";
-			}
-			msgString = rank+mapptr->getMessage();
-			if(current_player != destination_player)
-			{
-				writeQueue(mqueue_name[q_index],msgString);
-			}
-		}
-		else if(a == 66 || a == 98) // "B" or 'b' key --- broadcast
-		{
-			string rank;
-			if(current_player == G_PLR0)
-			{
-				rank="Player 1 says: ";
-			}
-			else if(current_player == G_PLR1)
-			{
-				rank="Player 2 says: ";
-			}
-			else if(current_player == G_PLR2)
-			{
-				rank="Player 3 says: ";
-			}
-			else if(current_player == G_PLR3)
-			{
-				rank="Player 4 says: ";
-			}
-			else if(current_player == G_PLR4)
-			{
-				rank="Player 4 says: ";
-			}
-			msgString = rank+mapptr->getMessage();
-			for (int i = 0; i < 5;i++)
-			{
-				if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
-				{
-					writeQueue(mqueue_name[i],msgString);
-				}
-			}
-		}
+  }
+  else
+  {
+    DEBUG("NOT server created\n");
+    kill(goldmap->daemonID,SIGHUP);
+  }
 
-		if(goldmap->map[player_position] & G_FOOL)
-		{
-			goldmap->map[player_position] &= ~G_FOOL;
-			goldMine.postNotice(" Fools Gold..!!");
-		}
-		else if(goldmap->map[player_position] & G_GOLD)
-		{
-			realGoldFound = true;
-			goldmap->map[player_position] &= ~G_GOLD;
-			goldMine.postNotice(" Real Gold Found..To QUIT go to any edge of the Map!!");
-		}
 
-		if(sendSignal == true)
-		{
-				sendSignal = false;
-			  refreshScreen(goldmap);
-		}
-	}
+  while(running_flag && sig==false)
+  {
+    a = goldMine.getKey();
+    currentRow = player_position / NumberOfColumns;
+    currentColumn = player_position % NumberOfColumns;
 
-sem_wait(GameBoard_Sem);
-	if(current_player == G_PLR0)
-	{
-		if(realGoldFound==true)
-		{
-			msgString = "Player 1 has won...!!";
-			for (int i = 0; i < 5;i++)
-			{
-				if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
-				{
-					writeQueue(mqueue_name[i],msgString);
-				}
-			}
-		}
-		mq_close(readqueue_fd);
-		mq_unlink(mqueue_name[0].c_str());
-		goldmap->player_pid[0] = 0;
-	}
-	else if(current_player == G_PLR1)
-	{
-			if(realGoldFound==true)
-			{
-				msgString = "Player 2 has won...!!";
-				for (int i = 0; i < 5;i++)
-				{
-					if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
-					{
-						writeQueue(mqueue_name[i],msgString);
-					}
-				}
-			}
-		mq_close(readqueue_fd);
-		mq_unlink(mqueue_name[1].c_str());
-		goldmap->player_pid[1] = 0;
-	}
-	else if(current_player == G_PLR2)
-	{
-		if(realGoldFound==true)
-		{
-			msgString = "Player 3 has won...!!";
-			for (int i = 0; i < 5;i++)
-			{
-				if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
-				{
-						writeQueue(mqueue_name[i],msgString);
-				}
-			}
-		}
-		mq_close(readqueue_fd);
-		mq_unlink(mqueue_name[2].c_str());
-		goldmap->player_pid[2] = 0;
-	}
-	else if(current_player == G_PLR3)
-	{
-		if(realGoldFound==true)
-		{
-			msgString = "Player 4 has won...!!";
-			for (int i = 0; i < 5;i++)
-			{
-				if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
-				{
-						writeQueue(mqueue_name[i],msgString);
-				}
-			}
-		}
-		mq_close(readqueue_fd);
-		mq_unlink(mqueue_name[3].c_str());
-		goldmap->player_pid[3] = 0;
-	}
-	else if(current_player == G_PLR4)
-	{
-		if(realGoldFound==true)
-		{
-			msgString = "Player 5 has won...!!";
-			for (int i = 0; i < 5;i++)
-			{
-				if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
-				{
-					writeQueue(mqueue_name[i],msgString);
-				}
+    if(currentColumn == 0)
+    {
+      currentColumn = NumberOfColumns;
+    }
 
-			}
-		}
-		mq_close(readqueue_fd);
-		mq_unlink(mqueue_name[4].c_str());
-		goldmap->player_pid[4] = 0;
-	}
+    if( a == 104 ) //  'h' Key for Left Movement
+    {
 
-	goldmap->map[player_position] &= ~current_player;
+      if(realGoldFound == true && currentColumn-1 == 0)
+      {
+        sem_wait(GameBoard_Sem);
+        goldmap->map[player_position] &= ~current_player;
+        sem_post(GameBoard_Sem);
+        //	kill(goldmap->daemonID,SIGUSR1);
+        break;
+      }
+      if(goldmap->map[player_position-1] != G_WALL )
+      {
+        goldmap->map[player_position] &= ~current_player;
+        player_position = player_position -1;
+        goldmap->map[player_position]  |= current_player;
+        goldMine.drawMap();
+        sendSignal = true;
 
-	refreshScreen(goldmap);
-	sem_post(GameBoard_Sem);
-	kill(goldmap->daemonID, SIGHUP);
+      }
 
-	return 0;
+      //kill(goldmap->daemonID,SIGUSR1);
+    }
+    else if( a == 108 ) /// 'l' Key for Right Movement
+    {
+      if(realGoldFound == true && currentColumn == goldmap->cols -1)
+      {
+        sem_wait(GameBoard_Sem);
+        goldmap->map[player_position] &= ~current_player;
+        sem_post(GameBoard_Sem);
+        //	kill(goldmap->daemonID,SIGUSR1);
+        break;
+      }
+      if(goldmap->map[player_position+1] != G_WALL )//| currentColumn != 0 )
+      {
+        goldmap->map[player_position] &= ~current_player;
+        player_position = player_position+1;
+        goldmap->map[player_position]  |= current_player;
+        goldMine.drawMap();
+        sendSignal = true;
+
+
+      }
+      //	kill(goldmap->daemonID,SIGUSR1);
+    }
+    else if( a == 106 ) // 'j' Key for Down Movement
+    {
+      if(realGoldFound == true && currentRow >= NumberOfRows-1 )
+      {
+        sem_wait(GameBoard_Sem);
+        goldmap->map[player_position] &= ~current_player;
+        sem_post(GameBoard_Sem);
+        //	kill(goldmap->daemonID,SIGUSR1);
+        break;
+      }
+      if(goldmap->map[player_position+NumberOfColumns] != G_WALL  && currentRow < NumberOfRows-1 )
+      {
+        goldmap->map[player_position] &= ~current_player;
+        player_position = player_position+NumberOfColumns;
+        goldmap->map[player_position]  |= current_player;
+        goldMine.drawMap();
+        sendSignal = true;
+
+      }
+      //kill(goldmap->daemonID,SIGUSR1);
+    }
+    else if( a == 107 ) // 'k' Key for Upward Movement
+    {
+      if(realGoldFound == true && player_position-NumberOfColumns <= 0)
+      {
+        sem_wait(GameBoard_Sem);
+        goldmap->map[player_position] &= ~current_player;
+        sem_post(GameBoard_Sem);
+        //kill(goldmap->daemonID,SIGUSR1);
+        break;
+      }
+      if(player_position-NumberOfColumns > 0)
+      {
+        if(goldmap->map[player_position-NumberOfColumns] != G_WALL)
+        {
+          goldmap->map[player_position] &= ~current_player;
+          player_position = player_position-NumberOfColumns;
+          goldmap->map[player_position]  |= current_player;
+          goldMine.drawMap();
+          sendSignal = true;
+
+        }
+        //	kill(goldmap->daemonID,SIGUSR1);
+      }
+
+      //	kill(goldmap->daemonID,SIGUSR1);
+    }
+    else if(a == 81)   /// Q for quit
+    {
+      running_flag = false;
+
+      sem_wait(GameBoard_Sem);
+      goldmap->player--;
+      goldmap->map[player_position] &= ~current_player;
+      sem_post(GameBoard_Sem);
+
+    }
+    else if(a == 77 || a == 109) // key 'M' or 'm' for Message sending
+    {
+      string rank;
+      unsigned int mask=0;
+      for(int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0)
+        {
+          switch (i) {
+            case 0:
+              mask |= G_PLR0;
+              break;
+            case 1:
+              mask |= G_PLR1;
+              break;
+            case 2:
+              mask |= G_PLR2;
+              break;
+            case 3:
+              mask |= G_PLR3;
+              break;
+            case 4:
+              mask |= G_PLR4;
+              break;
+          }
+        }
+      }
+
+      unsigned int destination_player;
+      destination_player = mapptr->getPlayer(mask);
+      int q_index=0;
+
+      if (destination_player == G_PLR0)
+      {
+        q_index = 0;
+      }
+      else if (destination_player == G_PLR1)
+      {
+        q_index = 1;
+      }
+      else if(destination_player == G_PLR2)
+      {
+        q_index = 2;
+      }
+      else if(destination_player == G_PLR3)
+      {
+        q_index = 3;
+      }
+      else if(destination_player == G_PLR4)
+      {
+        q_index = 4;
+      }
+      if(current_player == G_PLR0)
+      {
+        rank="Player 1 says: ";
+      }
+      else if(current_player == G_PLR1)
+      {
+        rank="Player 2 says: ";
+      }
+      else if(current_player == G_PLR2)
+      {
+        rank="Player 3 says: ";
+      }
+      else if(current_player == G_PLR3)
+      {
+        rank="Player 4 says: ";
+      }
+      else if(current_player == G_PLR4)
+      {
+        rank="Player 4 says: ";
+      }
+      msgString = rank+mapptr->getMessage();
+      if(current_player != destination_player)
+      {
+        writeQueue(mqueue_name[q_index],msgString);
+      }
+    }
+    else if(a == 66 || a == 98) // "B" or 'b' key --- broadcast
+    {
+      string rank;
+      if(current_player == G_PLR0)
+      {
+        rank="Player 1 says: ";
+      }
+      else if(current_player == G_PLR1)
+      {
+        rank="Player 2 says: ";
+      }
+      else if(current_player == G_PLR2)
+      {
+        rank="Player 3 says: ";
+      }
+      else if(current_player == G_PLR3)
+      {
+        rank="Player 4 says: ";
+      }
+      else if(current_player == G_PLR4)
+      {
+        rank="Player 4 says: ";
+      }
+      msgString = rank+mapptr->getMessage();
+      for (int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
+        {
+          writeQueue(mqueue_name[i],msgString);
+        }
+      }
+    }
+
+    if(goldmap->map[player_position] & G_FOOL)
+    {
+      goldmap->map[player_position] &= ~G_FOOL;
+      goldMine.postNotice(" Fools Gold..!!");
+    }
+    else if(goldmap->map[player_position] & G_GOLD)
+    {
+      realGoldFound = true;
+      goldmap->map[player_position] &= ~G_GOLD;
+      goldMine.postNotice(" Real Gold Found..To QUIT go to any edge of the Map!!");
+    }
+
+    if(sendSignal == true)
+    {
+      sendSignal = false;
+      refreshScreen(goldmap);
+      for(int i = 0; i < 5; i++)
+      {
+        DEBUG("after movement\n");
+        if(goldmap->player_pid[i] != goldmap->daemonID)
+        {
+          kill(goldmap->daemonID,SIGUSR1);
+        }
+
+      }
+    }
+  }
+
+  sem_wait(GameBoard_Sem);
+  if(current_player == G_PLR0)
+  {
+    if(realGoldFound==true)
+    {
+      msgString = "Player 1 has won...!!";
+      for (int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
+        {
+          writeQueue(mqueue_name[i],msgString);
+        }
+      }
+    }
+    mq_close(readqueue_fd);
+    mq_unlink(mqueue_name[0].c_str());
+    goldmap->player_pid[0] = 0;
+  }
+  else if(current_player == G_PLR1)
+  {
+    if(realGoldFound==true)
+    {
+      msgString = "Player 2 has won...!!";
+      for (int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
+        {
+          writeQueue(mqueue_name[i],msgString);
+        }
+      }
+    }
+    mq_close(readqueue_fd);
+    mq_unlink(mqueue_name[1].c_str());
+    goldmap->player_pid[1] = 0;
+  }
+  else if(current_player == G_PLR2)
+  {
+    if(realGoldFound==true)
+    {
+      msgString = "Player 3 has won...!!";
+      for (int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
+        {
+          writeQueue(mqueue_name[i],msgString);
+        }
+      }
+    }
+    mq_close(readqueue_fd);
+    mq_unlink(mqueue_name[2].c_str());
+    goldmap->player_pid[2] = 0;
+  }
+  else if(current_player == G_PLR3)
+  {
+    if(realGoldFound==true)
+    {
+      msgString = "Player 4 has won...!!";
+      for (int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
+        {
+          writeQueue(mqueue_name[i],msgString);
+        }
+      }
+    }
+    mq_close(readqueue_fd);
+    mq_unlink(mqueue_name[3].c_str());
+    goldmap->player_pid[3] = 0;
+  }
+  else if(current_player == G_PLR4)
+  {
+    if(realGoldFound==true)
+    {
+      msgString = "Player 5 has won...!!";
+      for (int i = 0; i < 5;i++)
+      {
+        if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i]!=getpid())
+        {
+          writeQueue(mqueue_name[i],msgString);
+        }
+
+      }
+    }
+    mq_close(readqueue_fd);
+    mq_unlink(mqueue_name[4].c_str());
+    goldmap->player_pid[4] = 0;
+  }
+
+  goldmap->map[player_position] &= ~current_player;
+
+  refreshScreen(goldmap);
+  sem_post(GameBoard_Sem);
+  kill(goldmap->daemonID, SIGHUP);
+
+  return 0;
 }
 
 void create_server_daemon()
 {
 
-	if(fork()>0)
-	  {
-	    return;
-	  }
-	  if(fork()>0)
-		{
-    	exit(0);
-		}
-	  if(setsid()==-1)
-		{
-			exit(1);
-		}
+  if(fork()>0)
+  {
+    return;
+  }
+  if(fork()>0)
+  {
+    exit(0);
+  }
+  if(setsid()==-1)
+  {
+    exit(1);
+  }
 
-	  for(int i = 0; i< sysconf(_SC_OPEN_MAX); ++i)
-		{
-			close(i);
-		}
-	  open("/dev/null", O_RDWR); //fd 0
-	  open("/dev/null", O_RDWR); //fd 1
-	  open("/dev/null", O_RDWR); //fd 2
-	  umask(0);
-	  chdir("/");
+  for(int i = 0; i< sysconf(_SC_OPEN_MAX); ++i)
+  {
+    if(i != debugFD)//close everything, except write
+      close(i);
+  }
+  open("/dev/null", O_RDWR); //fd 0
+  open("/dev/null", O_RDWR); //fd 1
+  open("/dev/null", O_RDWR); //fd 2
+  umask(0);
+  chdir("/");
 
-//		sleep(3);
-		debugFD = open("/home/akshay/private_git_611/611/mypipe",O_WRONLY);
+  //		sleep(3);
 
-		WRITE(debugFD, "daemon created\n", sizeof("daemon created\n"));
+  DEBUG("daemon created\n");
 
-		int shm_fd = shm_open("/GameBoard_Mem",O_EXCL|O_RDWR , S_IRUSR | S_IWUSR);
+  //////////////////////////-----SIGHUP Trapping ----/////////////////////////////
 
-		if(shm_fd == -1)
-		{
-			WRITE(debugFD, "ERROR : deamon shm_Fd \n", sizeof("ERROR : deamon shm_Fd \n"));
-		}
+  /*  Sighup*/
+  struct sigaction sighup_action;
+  //handle with this function
+  sighup_action.sa_handler=sighup_handeler;
+  //zero out the mask (allow any signal to interrupt)
+  sigemptyset(&sighup_action.sa_mask);
+  sigaddset(&sighup_action.sa_mask, SIGUSR1);//block SIGUSR1 while handling SIGHUP
+  sighup_action.sa_flags=0;
+  //tell how to handle SIGHUP
+  sigaction(SIGHUP, &sighup_action, NULL);
 
-		int rows =0,cols = 0;
-
-		rows = goldmap->rows;
-		cols = goldmap->cols;
-
-		goldmap = (GameBoard*)mmap(NULL, rows*cols+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, shm_fd, 0);
-
-		if(goldmap == MAP_FAILED )
-		{
-			WRITE(debugFD, "MAP Reading for Daemon\n", sizeof("MAP Reading for Daemon\n"));
-		}
-
-		if(goldmap->rows == 26)
-		{
-				WRITE(debugFD, "row count is 26\n", sizeof("row count is 26\n"));
-		}
-
-		goldmap->daemonID=getpid();
-	//	gm->daemonID = getpid();
-
-		local_mapcopy = new unsigned char[(rows*cols)];
-
-		//unsigned char local_mapcopy[rows*cols];
-
-		for(int x = 0; x < rows*cols ; x++)
-		{
-			local_mapcopy[x] = goldmap->map[x];
-		}
+  /*  sigusr1*/
 
 
-//////////////////////////-----SIGHUP Trapping ----/////////////////////////////
-
-/*  Sighup*/
-		struct sigaction sighup_action;
-		//handle with this function
-		sighup_action.sa_handler=sighup_handeler;
-		//zero out the mask (allow any signal to interrupt)
-		sigemptyset(&sighup_action.sa_mask);
-		sighup_action.sa_flags=0;
-		//tell how to handle SIGHUP
-		sigaction(SIGHUP, &sighup_action, NULL);
-
-/*  sigusr1*/
+  struct sigaction sigusr1_action;
+  //handle with this function
+  sigusr1_action.sa_handler=sigusr1_handeler;
+  //zero out the mask (allow any signal to interrupt)
+  //		sigemptyset(&sigusr1_action.sa_mask);
+  sigusr1_action.sa_flags=0;
+  //tell how to handle SIGUSR1
+  //server daemon handles SIGUSR1 as sigusr1_handeler
+  sigaction(SIGUSR1, &sigusr1_action, NULL);
 
 
-		struct sigaction sigusr1_action;
-		//handle with this function
-		sigusr1_action.sa_handler=sigusr1_handeler;
-		//zero out the mask (allow any signal to interrupt)
-		sigemptyset(&sigusr1_action.sa_mask);
-		sigusr1_action.sa_flags=0;
-		//tell how to handle SIGURS1
-		sigaction(SIGUSR1, &sigusr1_action, NULL);
+  /*  sigsr2*/
 
 
-/*  sigsr2*/
-
-
-		struct sigaction sigusr2_action;
-		//handle with this function
-		sigusr2_action.sa_handler=sigusr2_handeler;
-		//zero out the mask (allow any signal to interrupt)
-		sigemptyset(&sigusr2_action.sa_mask);
-		sigusr2_action.sa_flags=0;
-		//tell how to handle SIGURS2
-		sigaction(SIGUSR2, &sigusr2_action, NULL);
+  struct sigaction sigusr2_action;
+  //handle with this function
+  sigusr2_action.sa_handler=sigusr2_handeler;
+  //zero out the mask (allow any signal to interrupt)
+  sigemptyset(&sigusr2_action.sa_mask);
+  //	sigaddset(&sigusr2_action.sa_mask, SIGUSR2);//block SIGUSR1 while handling SIGHUP
+  sigusr2_action.sa_flags=0;
+  //tell how to handle SIGURS2
+  sigaction(SIGUSR2, &sigusr2_action, NULL);
 
 
 
-	int status; //for error checking
+  int rows1 =0,cols1 = 0;
 
-	//change this # between 2000-65k before using
-	const char* portno="42424";
-	struct addrinfo hints;
-	memset(&hints, 0, sizeof(hints)); //zero out everything in structure
-	hints.ai_family = AF_UNSPEC; //don't care. Either IPv4 or IPv6
-	hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
-	hints.ai_flags=AI_PASSIVE; //file in the IP of the server for me
+  int fdiscriptor = shm_open("/GameBoard_Mem", O_RDWR|O_EXCL , S_IRUSR | S_IWUSR);
+  if(fdiscriptor == -1)
+  {
+    cerr<<"second FD "<<endl;
+  }
 
-	struct addrinfo *servinfo;
-	if((status=getaddrinfo(NULL, portno, &hints, &servinfo))==-1)
-	{
-		//fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-		exit(1);
-	}
-	sockfd=socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+  // read shared map
+  //int map_rows, map_columns ;
+  READ(fdiscriptor, &rows1, sizeof(int));
+  READ(fdiscriptor, &cols1, sizeof(int));
 
-	/*avoid "Address already in use" error*/
-	int yes=1;
-	if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))==-1)
-	{
-		//perror("setsockopt");
-		exit(1);
-	}
+  goldmap = (GameBoard*)mmap(NULL, rows1*cols1+sizeof(GameBoard), PROT_READ|PROT_WRITE, MAP_SHARED, fdiscriptor, 0);
 
-	//We need to "bind" the socket to the port number so that the kernel
-	//can match an incoming packet on a port to the proper process
-	if((status=bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
-	{
-		//perror("bind");
-		exit(1);
-	}
-	//when done, release dynamically allocated memory
-	freeaddrinfo(servinfo);
+  if(goldmap == MAP_FAILED )
+  {
+    DEBUG("MAP Reading for Daemon\n");
+  }
+  int rows = 0 , cols =0 ;
 
-	if(listen(sockfd,1)==-1)
-	{
-		//perror("listen");
-		exit(1);
-	}
-
-//	printf("Blocking, waiting for client to connect\n");
-
-	struct sockaddr_in client_addr;
-	socklen_t clientSize=sizeof(client_addr);
-	//int new_sockfd;
-
-	do{
-		new_sockfd=accept(sockfd, (struct sockaddr*) &client_addr, &clientSize);
-	}while(new_sockfd==-1 && errno==EINTR);
-
-sockfd = new_sockfd;
-	WRITE(debugFD,"accepted\n",sizeof("accepted\n"));
-	//read & write to the socket
-
-	 //WRITE(debugFD, buffer, sizeof(buffer));
-
-	 if(goldmap->rows == 26)
-	 {
-		 	WRITE(debugFD, "12344\n", sizeof("12344\n"));
-	 }
-	 if(goldmap->cols == 80)
-	 {
-		 	WRITE(debugFD, "fdxcghjk\n", sizeof("fdxcghjk\n"));
-	 }
-
-	// rows = 26;
-
-	  WRITE(new_sockfd,&goldmap->rows,sizeof(goldmap->rows));
-	  WRITE(new_sockfd,&goldmap->cols,sizeof(goldmap->cols));
-
-	unsigned char* mptr = local_mapcopy;
-
-	for(int i = 0 ; i < (goldmap->rows*goldmap->cols);i++)
-	{
-		WRITE(new_sockfd,&mptr[i],sizeof(mptr[i]));
-	}
+  rows = goldmap->rows;
+  cols = goldmap->cols;
 
 
-	unsigned char SockPlayer = G_SOCKPLR;
+  local_mapcopy = new unsigned char[(rows*cols)];
+  goldmap->daemonID=getpid();
 
-for(int i=0; i<5; ++i)
-{
- if(goldmap->player_pid[i]!=0)
- {
-	 switch(i)
-	 {
-		 case 0:
-			 SockPlayer|=G_PLR0;
-			 break;
-		 case 1:
-			 SockPlayer|=G_PLR1;
-			 break;
-		 case 2:
-			 SockPlayer|=G_PLR2;
-			 break;
-		 case 3:
-			 SockPlayer|=G_PLR3;
-			 break;
-		 case 4:
-			 SockPlayer|=G_PLR4;
-			 break;
-	 }
- }
-}
+  int status; //for error checking
 
-	WRITE(new_sockfd, &SockPlayer,sizeof(SockPlayer));
-//	WRITE(debugFD, &SockPlayer, sizeof(SockPlayer));  //debug
-	continuous_listen();
-//add when exiting
-	//close(new_sockfd);
+  //change this # between 2000-65k before using
+  const char* portno="42424";
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints)); //zero out everything in structure
+  hints.ai_family = AF_UNSPEC; //don't care. Either IPv4 or IPv6
+  hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
+  hints.ai_flags=AI_PASSIVE; //file in the IP of the server for me
 
-////////////////////////////////SOCKET END//////////////////////////////////////
+  struct addrinfo *servinfo;
+  if((status=getaddrinfo(NULL, portno, &hints, &servinfo))==-1)
+  {
+    //fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+    exit(1);
+  }
+  sockfd=socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+
+  /*avoid "Address already in use" error*/
+  int yes=1;
+  if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))==-1)
+  {
+    //perror("setsockopt");
+    exit(1);
+  }
+
+  //We need to "bind" the socket to the port number so that the kernel
+  //can match an incoming packet on a port to the proper process
+  if((status=bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
+  {
+    //perror("bind");
+    exit(1);
+  }
+  //when done, release dynamically allocated memory
+  freeaddrinfo(servinfo);
+
+  if(listen(sockfd,1)==-1)
+  {
+    //perror("listen");
+    exit(1);
+  }
+
+  //	printf("Blocking, waiting for client to connect\n");
+
+  struct sockaddr_in client_addr;
+  socklen_t clientSize=sizeof(client_addr);
+  //int new_sockfd;
+
+  do{
+    new_sockfd=accept(sockfd, (struct sockaddr*) &client_addr, &clientSize);
+  }while(new_sockfd==-1 && errno==EINTR);
+
+  sockfd = new_sockfd;
+  DEBUG("accepted\n");
+  //read & write to the socket
+
+
+
+  for(int x = 0; x < rows*cols ; x++)
+  {
+    local_mapcopy[x] = goldmap->map[x];
+  }
+
+
+  //WRITE(debugFD, buffer, sizeof(buffer));
+
+  if(goldmap->rows == 26)
+  {
+    DEBUG("12344\n");
+  }
+  if(goldmap->cols == 80)
+  {
+    DEBUG("fdxcghjk\n");
+  }
+
+  WRITE(new_sockfd,&goldmap->rows,sizeof(goldmap->rows));
+  WRITE(new_sockfd,&goldmap->cols,sizeof(goldmap->cols));
+
+  unsigned char* mptr = local_mapcopy;
+
+  for(int i = 0 ; i < (goldmap->rows*goldmap->cols);i++)
+  {
+    unsigned char bit =local_mapcopy[i];
+    WRITE(new_sockfd,&bit,sizeof(bit));
+  }
+
+  unsigned char SockPlayer = G_SOCKPLR;
+
+  for(int i=0; i<5; ++i)
+  {
+    if(goldmap->player_pid[i]!=0)
+    {
+      switch(i)
+      {
+        case 0:
+          SockPlayer|=G_PLR0;
+          break;
+        case 1:
+          SockPlayer|=G_PLR1;
+          break;
+        case 2:
+          SockPlayer|=G_PLR2;
+          break;
+        case 3:
+          SockPlayer|=G_PLR3;
+          break;
+        case 4:
+          SockPlayer|=G_PLR4;
+          break;
+      }
+    }
+  }
+
+  WRITE(new_sockfd, &SockPlayer,sizeof(SockPlayer));
+  //	WRITE(debugFD, &SockPlayer, sizeof(SockPlayer));  //debug
+  continuous_listen();
+
+
+
+  //add when exiting
+  //close(new_sockfd);
+
+  ////////////////////////////////SOCKET END//////////////////////////////////////
 }
 
 
 void client_deamon(string client_ip)
 {
-	pipe(pipefd);
-////////////////////////////////CLIENT DAEMON START////////////////////////////////////
-	if(fork()>0)
+  pipe(pipefd);
+  ////////////////////////////////CLIENT DAEMON START////////////////////////////////////
+  if(fork()>0)
   {
-		close(pipefd[1]); //close write, parent only needs read
+    close(pipefd[1]); //close write, parent only needs read
     int val;
     READ(pipefd[0], &val, sizeof(val));
     if(val==1)
       WRITE(1, "Success!\n", sizeof("Success!\n"));
     else
     {
-			  WRITE(1, "Failure!\n", sizeof("Failure!\n"));
-		}
-	//	wait(NULL);//reap zombie
+      WRITE(1, "Failure!\n", sizeof("Failure!\n"));
+    }
+    //	wait(NULL);//reap zombie
     return ;
   }
   if(fork()>0)
@@ -908,12 +941,12 @@ void client_deamon(string client_ip)
   if(setsid()==-1)
     exit(1);
   for(int i = 0; i< sysconf(_SC_OPEN_MAX); ++i)
-	{
-		if(i!=pipefd[1])//close everything, except write
-      {
-				close(i);
-			}
-	}
+  {
+    if(i!=pipefd[1] && i !=debugFD)//close everything, except write
+    {
+      close(i);
+    }
+  }
 
 
   open("/dev/null", O_RDWR); //fd 0
@@ -922,255 +955,180 @@ void client_deamon(string client_ip)
   umask(0);
   chdir("/");
 
-	debugFD = open("/home/akshay/private_git_611/611/mypipe",O_WRONLY);
-	WRITE(debugFD,"client deamon running\n", sizeof("client deamon running\n"));
-////////////////////////////////DAEMON END////////////////////////////////////
-//--------------------signal Trapping-----------------//
+  DEBUG("client deamon running\n");
+  ////////////////////////////////DAEMON END////////////////////////////////////
+  //--------------------signal Trapping-----------------//
 
 
-/*  Sighup*/
-		struct sigaction sighup_action;
-		//handle with this function
-		sighup_action.sa_handler=sighup_handeler;
-		//zero out the mask (allow any signal to interrupt)
-		sigemptyset(&sighup_action.sa_mask);
-		sighup_action.sa_flags=0;
-		//tell how to handle SIGHUP
-		sigaction(SIGHUP, &sighup_action, NULL);
+  /*  Sighup*/
+  struct sigaction sighup_action;
+  //handle with this function
+  sighup_action.sa_handler=sighup_handeler;
+  //zero out the mask (allow any signal to interrupt)
+  sigemptyset(&sighup_action.sa_mask);
+  sigaddset(&sighup_action.sa_mask, SIGUSR1);//block SIGUSR1 while handling SIGHUP
+  sighup_action.sa_flags=0;
+  //tell how to handle SIGHUP
+  sigaction(SIGHUP, &sighup_action, NULL);
 
-/*  sigusr1*/
-
-
-		struct sigaction sigusr1_action;
-		//handle with this function
-		sigusr1_action.sa_handler=sigusr1_handeler;
-		//zero out the mask (allow any signal to interrupt)
-		sigemptyset(&sigusr1_action.sa_mask);
-		sigusr1_action.sa_flags=0;
-		//tell how to handle SIGURS1
-		sigaction(SIGUSR1, &sigusr1_action, NULL);
+  /*  sigusr1*/
 
 
-/*  sigsr2*/
+  struct sigaction sigusr1_action;
+  //handle with this function
+  sigusr1_action.sa_handler=sigusr1_handeler;
+  //zero out the mask (allow any signal to interrupt)
+  sigemptyset(&sigusr1_action.sa_mask);
+  //	sigaddset(&sigusr1_action.sa_mask, SIGUSR1);//block SIGUSR1 while handling SIGHUP
+  sigusr1_action.sa_flags=0;
+  //tell how to handle SIGUSR1
+  //client daemon handles SIGUSR1 as sigusr1_handeler
+  sigaction(SIGUSR1, &sigusr1_action, NULL);
 
 
-		struct sigaction sigusr2_action;
-		//handle with this function
-		sigusr2_action.sa_handler=sigusr2_handeler;
-		//zero out the mask (allow any signal to interrupt)
-		sigemptyset(&sigusr2_action.sa_mask);
-		sigusr2_action.sa_flags=0;
-		//tell how to handle SIGURS2
-		sigaction(SIGUSR2, &sigusr2_action, NULL);
+  /*  sigsr2*/
+
+  struct sigaction sigusr2_action;
+  //handle with this function
+  sigusr2_action.sa_handler=sigusr2_handeler;
+  //zero out the mask (allow any signal to interrupt)
+  sigemptyset(&sigusr2_action.sa_mask);
+  //sigaddset(&sigusr2_action.sa_mask, SIGUSR2);//block SIGUSR1 while handling SIGHUP
+  sigusr2_action.sa_flags=0;
+  //tell how to handle SIGURS2
+  sigaction(SIGUSR2, &sigusr2_action, NULL);
 
 
+  //---------------------------signal trapping---------------//
 
-//---------------------------signal trapping---------------//
+  ////////////////////////////////CLIENT SOCKET///////////////////////////////////
 
+  //int sockfd; //file descriptor for the socket
+  //int status; //for error checking
 
+  //change this # between 2000-65k before using
+  const char* portno="42424";
 
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints)); //zero out everything in structure
+  hints.ai_family = AF_UNSPEC; //don't care. Either IPv4 or IPv6
+  hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
 
-////////////////////////////////CLIENT SOCKET///////////////////////////////////
+  struct addrinfo *servinfo;
+  //instead of "localhost", it could by any domain name
+  if((status=getaddrinfo(client_ip.c_str(), portno, &hints, &servinfo))==-1)
+  {
+    fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+    exit(1);
+  }
+  sockfd=socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
 
-//int sockfd; //file descriptor for the socket
-int status; //for error checking
+  if((status=connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
+  {
+    perror("connect");
+    exit(1);
+  }
 
-//change this # between 2000-65k before using
-const char* portno="42424";
+  new_sockfd = sockfd;
+  //release the information allocated by getaddrinfo()
+  freeaddrinfo(servinfo);
+  int rows1,cols1;
+  // reading rows and colomns
 
-struct addrinfo hints;
-memset(&hints, 0, sizeof(hints)); //zero out everything in structure
-hints.ai_family = AF_UNSPEC; //don't care. Either IPv4 or IPv6
-hints.ai_socktype=SOCK_STREAM; // TCP stream sockets
+  READ(new_sockfd,&rows1,sizeof(rows1));
+  READ(new_sockfd,&cols1,sizeof(cols1));
 
-struct addrinfo *servinfo;
-//instead of "localhost", it could by any domain name
-if((status=getaddrinfo(client_ip.c_str(), portno, &hints, &servinfo))==-1)
-{
-	fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-	exit(1);
-}
-sockfd=socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+  // reading map from server
 
-if((status=connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen))==-1)
-{
-	perror("connect");
-	exit(1);
-}
-//release the information allocated by getaddrinfo()
-freeaddrinfo(servinfo);
- int rows1=0,cols1=0;
+  local_mapcopy = new unsigned char[(rows1 * cols1)];
 
-// reading rows and colomns
-
-  READ(sockfd,&rows1,sizeof(int));
-  READ(sockfd,&cols1,sizeof(int));
-
-// reading map from server
-
- localClient = new unsigned char[(rows1 * cols1)];
-
- unsigned char read_from_server;
-
- for(int i = 0; i < rows1*cols1;i++)
- {
- 	 READ(sockfd, &read_from_server,sizeof(read_from_server));
- 	 localClient[i] = read_from_server;
- }
-
-	int client_mapSize = rows1 * cols1;
-
-//SEM OPEN
-
- GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_CREAT,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
- client_shared_mem=shm_open("/GameBoard_Mem",O_RDWR|O_CREAT,S_IWUSR|S_IRUSR);
- ftruncate(client_shared_mem ,client_mapSize + sizeof(GameBoard));
- goldmap = (GameBoard*) mmap(0,client_mapSize + sizeof(GameBoard),PROT_WRITE,MAP_SHARED,client_shared_mem,0);
+  //unsigned char read_from_server;
 
 
- // client_goldmap->rows = rows1;
- // client_goldmap->cols = cols1;
- // client_goldmap->daemonID = getpid();
+  int client_mapSize = rows1 * cols1;
 
- goldmap->rows = rows1;
- goldmap->cols = cols1;
- goldmap->daemonID = getpid();
+  for(int i = 0; i < client_mapSize ;i++)
+  {
+    READ(new_sockfd, &local_mapcopy[i],sizeof(local_mapcopy[i]));
+    //localClient[i] = read_from_server;
+  }
+
+  //SEM OPEN
+
+  GameBoard_Sem = sem_open("/GameBoard_Sem",O_RDWR|O_CREAT,S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR,1);
+  client_shared_mem=shm_open("/GameBoard_Mem",O_RDWR|O_CREAT,S_IWUSR|S_IRUSR);
+  ftruncate(client_shared_mem ,client_mapSize + sizeof(GameBoard));
+  goldmap = (GameBoard*) mmap(0,client_mapSize + sizeof(GameBoard),PROT_WRITE,MAP_SHARED,client_shared_mem,0);
+
+  goldmap->rows = rows1;
+  goldmap->cols = cols1;
+  goldmap->daemonID = getpid();
+
+  for(int i = 0; i < client_mapSize ;i++)
+  {
+    goldmap->map[i] = local_mapcopy[i];
+  }
+
+  unsigned char client_byte;
+
+  READ(new_sockfd, &client_byte,sizeof(client_byte));
+
+  unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2, G_PLR3, G_PLR4};
+  for(int i = 0; i < 5 ; i ++)
+  {
+    if(client_byte & player_bit[i] )
+    {
+      goldmap->player_pid[i] = goldmap->daemonID; //need to check
+    }
+  }
 
 
-
-for(int i = 0; i < rows1*cols1;i++)
-{
-	goldmap->map[i] = localClient[i];
-}
-
-unsigned char client_byte;
-READ(sockfd, &client_byte,sizeof(client_byte));
-
-unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2, G_PLR3, G_PLR4};
-for(int i = 0; i < 5 ; i ++)
-{
-
-	if(client_byte & player_bit[i] )
-	{
-		goldmap->player_pid[i] = goldmap->daemonID; //need to check
-	}
-}
-
-
-	int val=1;
+  int val=1;
   WRITE(pipefd[1], &val, sizeof(val));
 
-	continuous_listen();
-
-/*
-	while(1)
-	{
-
-		READ(sockfd,&listen_var1,sizeof(unsigned char));
-
-		if(listen_var1 & G_SOCKPLR)
-		{
-			  unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2,G_PLR3, G_PLR4};
-			  for(int i=0; i<5; ++i) //loop through the player bits
-			  {
-			    // If player bit is on and shared memory ID is zero,
-			    // a player (from other computer) has joined:
-			    if(listen_var1 & player_bit[i] && goldmap->player_pid[i]==0)
-			    {
-						goldmap->player_pid[i] = getpid();//goldmap->daemonID;
-					}
-					else if(!(listen_var1 & player_bit[i]) && goldmap->player_pid[i]!=0)
-			    {
-						goldmap->player_pid[i] = 0;
-					}
-			  }
-			  if(listen_var1 == G_SOCKPLR)
-			    {
-						//unlink code
-						sem_close(GameBoard_Sem);
-						sem_unlink("/GameBoard_Sem");
-						shm_unlink("/GameBoard_Mem");
-				}
-			}
-
-		else if (listen_var1 == 0)
-		{
-			short  pvec_first_read,pvec_size;
-			unsigned char pvec_second_read;
-			//sig user 1 bheja
-			READ(sockfd,&pvec_size,sizeof(pvec_size));
-			for(short i = 0; i < pvec_size;i++)
-			{
-				READ(sockfd,&pvec_first_read,sizeof(short));
-				READ(sockfd,&pvec_second_read,sizeof(unsigned char));
-				goldmap->map[pvec_first_read] = pvec_second_read;
-				localClient[pvec_first_read] = pvec_second_read;
-			}
-			for(int i = 0; i <5 ; i++)
-			{
-				if(goldmap->player_pid[i] != 0 && goldmap->player_pid[i] != getpid())
-				{
-					kill(goldmap->player_pid[i],SIGUSR1);
-				}
-			}
-		}
-
-		// else if(msg wala condition)
-		// {
-		// // need to write
-		// }
-
-//add when exiting
-		//close(sockfd);
-
-	}
-
-*/
-
-////////////////////////////CLIENT SOCKET END///////////////////////////////////
-
+  continuous_listen();
 }
+////////////////////////////CLIENT SOCKET END///////////////////////////////////
 
 void sighup_handeler(int z)
 {
-unsigned char	SockPlayer = G_SOCKPLR;
+  unsigned char SockPlayer1;
+  SockPlayer1 = G_SOCKPLR;
 
-for(int i=0; i<5; ++i)
- {
-	 if(goldmap->player_pid[i]!=0)
-	 {
-		 switch(i)
-		 {
-			 case 0:
-				 SockPlayer|=G_PLR0;
-				 break;
-			 case 1:
-				 SockPlayer|=G_PLR1;
-				 break;
-			 case 2:
-				 SockPlayer|=G_PLR2;
-				 break;
-			 case 3:
-				 SockPlayer|=G_PLR3;
-				 break;
-			 case 4:
-				 SockPlayer|=G_PLR4;
-				 break;
-		 }
-	 }
- }
-	WRITE(sockfd, &SockPlayer,sizeof(SockPlayer));
-
-
-	if(SockPlayer == G_SOCKPLR)
-	{
-		sem_close(GameBoard_Sem);
-		sem_unlink("/GameBoard_Sem");
-		shm_unlink("/GameBoard_Mem");
-		exit(1);
-	}
+  for(int i=0; i<5; ++i)
+  {
+    if(goldmap->player_pid[i]!=0)
+    {
+      switch(i)
+      {
+        case 0:
+          SockPlayer1|=G_PLR0;
+          break;
+        case 1:
+          SockPlayer1|=G_PLR1;
+          break;
+        case 2:
+          SockPlayer1|=G_PLR2;
+          break;
+        case 3:
+          SockPlayer1|=G_PLR3;
+          break;
+        case 4:
+          SockPlayer1|=G_PLR4;
+          break;
+      }
+    }
+  }
+  WRITE(sockfd, &SockPlayer1,sizeof(SockPlayer1));
 
 
+  if(SockPlayer1 == G_SOCKPLR)
+  {
+    sem_close(GameBoard_Sem);
+    sem_unlink("/GameBoard_Sem");
+    shm_unlink("/GameBoard_Mem");
+    exit(1);
+  }
 }
 
 
@@ -1178,240 +1136,174 @@ void sigusr2_handeler(int z)
 {
 
 }
+
 void sigusr1_handeler(int z)
 {
-	vector< pair<short,unsigned char> > pvec;
-//  unsigned char* shared_memory_map = gm->map;
-	for(short i=0; i< (goldmap->rows*goldmap->cols); ++i)
+  DEBUG("inside sihuser1 handler \n");
+  vector< pair<short,unsigned char> > pvec;
+  //  unsigned char* shared_memory_map = gm->map;
+  for(short i=0; i< (goldmap->rows*goldmap->cols); ++i)
   {
-    if(goldmap->map[i]!=local_mapcopy[i])
+    if(goldmap->map[i] != local_mapcopy[i])
     {
       pair<short,unsigned char> aPair;
       aPair.first=i;
       aPair.second=goldmap->map[i];
       pvec.push_back(aPair);
-      local_mapcopy[i]=goldmap->map[i];  /// ckeck local copy name for client
+      local_mapcopy[i] = goldmap->map[i];  /// ckeck local copy name for client
     }
   }
 
-	unsigned char zero = 0;
-	short pvec_size = pvec.size();
-  if (pvec.size() > 0 )
-	{
-		WRITE(sockfd,&zero, sizeof(int));
-		WRITE(sockfd,&pvec_size,sizeof(pvec_size));
-		for(short i = 0; i < pvec.size(); ++i)
-		{
-			WRITE(sockfd,&pvec[i].first,sizeof(short));
-			WRITE(sockfd,&pvec[i].second,sizeof(unsigned char));
-	 	}
-			/// socket write : Socket map
+  unsigned char zero = 0;
+
+  short pvec_size1 = pvec.size();
+  //if (pvec.size() > 0 )
+  //{
+  WRITE(new_sockfd,&zero, sizeof(zero));
+  WRITE(new_sockfd,&pvec_size1,sizeof(pvec_size1));
+  //		WRITE(debugFD,&pvec_size,sizeof(pvec_size));
+  for(short i = 0; i < pvec_size1; ++i)
+  {
+    WRITE(new_sockfd,&pvec[i].first,sizeof(pvec[i].first));
+    WRITE(new_sockfd,&pvec[i].second,sizeof(pvec[i].second));
   }
-
+  /// socket write : Socket map
+  //}
+  DEBUG("at the end sihuser1 handler \n");
 }
 
-
-void continuous_listen()
-{
-	while(1)
-	{
-
-		READ(sockfd,&listen_var,sizeof(unsigned char));
-
-		if(listen_var & G_SOCKPLR)
-		{
-				unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2,G_PLR3, G_PLR4};
-				for(int i=0; i<5; ++i) //loop through the player bits
-				{
-					if(listen_var & player_bit[i] && goldmap->player_pid[i]==0)
-					{
-						goldmap->player_pid[i] = getpid();//goldmap->daemonID;
-						WRITE(debugFD,&goldmap->player_pid[i], sizeof(goldmap->player_pid[i]));
-					}
-					else if(!(listen_var & player_bit[i]) && (goldmap->player_pid[i]!=0))
-					{
-							goldmap->player_pid[i] = 0;
-					}
-				}
-				if(listen_var == G_SOCKPLR)
-					{
-						//unlink code sem and shm
-						sem_close(GameBoard_Sem);
-						sem_unlink("/GameBoard_Sem");
-						shm_unlink("/GameBoard_Mem");
-				}
-
-			}
-
-		else if (listen_var == 0)
-		{
-			//	option		listen_var=9000;
-			short  pvec_first_read,pvec_size;
-			unsigned char pvec_second_read;
-			//sig user 1 bheja
-			READ(sockfd,&pvec_size,sizeof(pvec_size));
-			for(short i = 0; i < pvec_size;i++)
-			{
-				READ(sockfd,&pvec_first_read,sizeof(short));
-				READ(sockfd,&pvec_second_read,sizeof(unsigned char));
-				goldmap->map[pvec_first_read] = pvec_second_read;
-				local_mapcopy[pvec_first_read] = pvec_second_read;
-			}
-///for loop to send
-			for(int i = 0; i < 5 ; i++)
-			{
-				if((goldmap->player_pid[i] != 0) && ( goldmap->player_pid[i] != getpid()))
-				{
-					kill(goldmap->player_pid[i],SIGUSR1);
-				}
-			}
-		}
-		// else if( condition for msg)
-		// {
-		// // need to write
-		// }
-
-
-	}
-}
 
 void handle_interrupt(int)
 {
-	mapptr->drawMap();
+  mapptr->drawMap();
 }
+
+void continuous_listen()
+{
+  while(1)
+  {
+    unsigned char sb;
+    READ(new_sockfd,&sb,sizeof(sb));
+
+    if(sb & G_SOCKPLR)
+    {
+      unsigned char player_bit[5]={G_PLR0, G_PLR1, G_PLR2,G_PLR3, G_PLR4};
+      for(int i=0; i<5; ++i) //loop through the player bits
+      {
+        if((sb & player_bit[i]) && (goldmap->player_pid[i] == 0))
+        {
+          goldmap->player_pid[i] = goldmap->daemonID;
+          //WRITE(debugFD,&goldmap->player_pid[i], sizeof(goldmap->player_pid[i]));
+        }
+        else if(!(sb & player_bit[i]) && (goldmap->player_pid[i] == 0))
+        {
+          goldmap->player_pid[i] = 0;
+        }
+      }
+      //	refreshScreen(goldmap);
+    }
+    if(sb == G_SOCKPLR)
+    {
+      //kill(goldmap->daemonID,SIGHUP);
+      //unlink code sem and shm
+      sem_close(GameBoard_Sem);
+      sem_unlink("/GameBoard_Sem");
+      shm_unlink("/GameBoard_Mem");
+    }
+    else if (sb == 0)
+    {
+      //	option		listen_var=9000;
+      short pvec_size;
+
+      //sig user 1 bheja
+      READ(new_sockfd,&pvec_size,sizeof(pvec_size));
+
+      DEBUG("pvec_size=%d\n",pvec_size);
+
+      for(short i = 0; i < pvec_size;i++)
+      {
+        DEBUG("inside for\n");
+
+        short  pvec_first_read;
+        unsigned char pvec_second_read;
+        READ(new_sockfd,&pvec_first_read,sizeof(pvec_first_read));
+        READ(new_sockfd,&pvec_second_read,sizeof(pvec_second_read));
+        local_mapcopy[pvec_first_read] = pvec_second_read;
+        goldmap->map[pvec_first_read] = pvec_second_read;
+        //	refreshScreen(goldmap);
+        for(int i=0;i<5;i++)
+        {
+
+          if(goldmap->player_pid[i]!= 0 && goldmap->player_pid[i]!=getpid())
+          {
+            DEBUG("insidde for refresh\n");
+            kill(goldmap->player_pid[i], SIGUSR1);
+          }
+
+        }
+
+      }
+
+    }
+    // else if( condition for msg)
+    // {
+    // // need to write
+    // }
+
+
+  }
+}
+
+
+
+
 
 /** Function to insert Fool's and Real Gold into the Map*/
 
 int insertGold(unsigned char* map,int No_Of_Gold,int NumberOfRows,int NumberOfColumn)
 {
-	unsigned char* tempMap = map;
-	srand(time(NULL));
-	int position;
-	bool insert_flag = true;
-	int counter = No_Of_Gold-1;
+  unsigned char* tempMap = map;
+  srand(time(NULL));
+  int position;
+  bool insert_flag = true;
+  int counter = No_Of_Gold-1;
 
-	while(insert_flag)
-	{
-		position = rand() % (NumberOfRows*NumberOfColumn);
+  while(insert_flag)
+  {
+    position = rand() % (NumberOfRows*NumberOfColumn);
 
-		if(tempMap[position] == 0)
-		{
-			if(counter != 0)
-			{
-				tempMap[position] = G_FOOL;
-				counter--;
-			}
-			else
-			{
-				tempMap[position] = G_GOLD;
-				insert_flag = false;
-			}
-		}
-	}
-	return 0;
+    if(tempMap[position] == 0)
+    {
+      if(counter != 0)
+      {
+        tempMap[position] = G_FOOL;
+        counter--;
+      }
+      else
+      {
+        tempMap[position] = G_GOLD;
+        insert_flag = false;
+      }
+    }
+  }
+  return 0;
 }
-
-
-//
-// void sighup_handeler_client(int z)
-// {
-// unsigned char SockPlayer = G_SOCKPLR;
-//
-// for(int i=0; i<5; ++i)
-//  {
-// 	 if(client_goldmap->player_pid[i]!=0)
-// 	 {
-// 		 switch(i)
-// 		 {
-// 			 case 0:
-// 				 SockPlayer|=G_PLR0;
-// 				 break;
-// 			 case 1:
-// 				 SockPlayer|=G_PLR1;
-// 				 break;
-// 			 case 2:
-// 				 SockPlayer|=G_PLR2;
-// 				 break;
-// 			 case 3:
-// 				 SockPlayer|=G_PLR3;
-// 				 break;
-// 			 case 4:
-// 				 SockPlayer|=G_PLR4;
-// 				 break;
-// 		 }
-// 	 }
-//  }
-// 			WRITE(sockfd, &SockPlayer,sizeof(SockPlayer));
-//
-//
-// 	if(SockPlayer == G_SOCKPLR)
-// 	{
-// 		sem_close(GameBoard_Sem);
-// 		sem_unlink("/GameBoard_Sem");
-// 		shm_unlink("/GameBoard_Mem");
-// 		exit(1);
-// 	}
-//
-//
-// }
-//
-//
-// void sigusr1_handeler_client(int z)
-// {
-// 	vector< pair<short,unsigned char> > pvec;
-//   // unsigned char* shared_memory_map = client_goldmap->map;
-// 	for(short i=0; i< (client_goldmap->rows*client_goldmap->cols); ++i)
-//   {
-//     if(client_goldmap->map[i]!=localClient[i])
-//     {
-//       pair<short,unsigned char> aPair;
-//       aPair.first=i;
-//       aPair.second=client_goldmap->map[i];
-//       pvec.push_back(aPair);
-//       localClient[i]=client_goldmap->map[i];  /// ckeck local copy name for client
-//     }
-//   }
-//
-// 		unsigned char zero = 0;
-// 		short pvec_size = pvec.size();
-// 	  if (pvec.size() > 0 )
-// 		{
-// 			WRITE(sockfd,&zero, sizeof(int));
-// 			WRITE(sockfd,&pvec_size,sizeof(pvec_size));
-// 			for(short i = 0; i < pvec.size(); ++i)
-// 			{
-// 				WRITE(sockfd,&pvec[i].first,sizeof(short));
-// 				WRITE(sockfd,&pvec[i].second,sizeof(unsigned char));
-// 		 	}
-// 				/// socket write : Socket map
-// 	  }
-//
-// }
-//
-//
-// void sigusr2_handeler_client(int z)
-// {
-//
-// }
-//
-//
-
 
 /** Function to insert players into the Map*/
 int insertPlayer(unsigned char* map,unsigned char player, int NumberOfRows, int NumberOfColumn)
 {
-	unsigned char* tempMap2 = map;
-	srand(time(NULL));
-	int position=0;
-	while(1)
-	{
-		position = rand() % (NumberOfRows*NumberOfColumn);
-		if(tempMap2[position] == 0)
-		{
-			tempMap2[position] = player;
-			return position;
-		}
-	}
+  unsigned char* tempMap2 = map;
+  srand(time(NULL));
+  int position=0;
+  while(1)
+  {
+    position = rand() % (NumberOfRows*NumberOfColumn);
+    if(tempMap2[position] == 0)
+    {
+      tempMap2[position] = player;
+      return position;
+    }
+  }
 }
 
 void read_message(int)  //// msg que read
@@ -1427,8 +1319,8 @@ void read_message(int)  //// msg que read
   memset(msg, 0, 121);//set all characters to '\0'
   while((err=mq_receive(readqueue_fd, msg, 120, NULL))!=-1)
   {
-		mapptr->postNotice(msg);
-		memset(msg, 0, 121);//set all characters to '\0'
+    mapptr->postNotice(msg);
+    memset(msg, 0, 121);//set all characters to '\0'
   }
   //we exit while-loop when mq_receive returns -1
   //if errno==EAGAIN that is normal: there is no message waiting
@@ -1441,59 +1333,59 @@ void read_message(int)  //// msg que read
 
 void clean_up(int)  /// msg queue cleanup
 {
-		mq_close(readqueue_fd);
-		sig=true;
+  mq_close(readqueue_fd);
+  sig=true;
 }
 
 
 void readQueue(string mqueue_name)
 {
-	//I have added this signal-handling
-	//code so that if you type ctrl-c to
-	//abort the long, slow loop at the
-	//end of main, then your message queue
-	//will be properly cleaned up.
-	if((readqueue_fd=mq_open(mqueue_name.c_str(), O_RDONLY|O_CREAT|O_EXCL|O_NONBLOCK,
-					S_IRUSR|S_IWUSR, &mq_attributes))==-1)
-	{
-		perror("mq_open 123");
-		exit(1);
-	}
-	//set up message queue to receive signal whenever message comes in
-	struct sigevent mq_notification_event;
-	mq_notification_event.sigev_notify=SIGEV_SIGNAL;
-	mq_notification_event.sigev_signo=SIGUSR2;
-	mq_notify(readqueue_fd, &mq_notification_event);
+  //I have added this signal-handling
+  //code so that if you type ctrl-c to
+  //abort the long, slow loop at the
+  //end of main, then your message queue
+  //will be properly cleaned up.
+  if((readqueue_fd=mq_open(mqueue_name.c_str(), O_RDONLY|O_CREAT|O_EXCL|O_NONBLOCK,
+          S_IRUSR|S_IWUSR, &mq_attributes))==-1)
+  {
+    perror("mq_open 123");
+    exit(1);
+  }
+  //set up message queue to receive signal whenever message comes in
+  struct sigevent mq_notification_event;
+  mq_notification_event.sigev_notify=SIGEV_SIGNAL;
+  mq_notification_event.sigev_signo=SIGUSR2;
+  mq_notify(readqueue_fd, &mq_notification_event);
 
 }
 
 void writeQueue(string mqueue_name,string msgString)
 {
-	mqd_t writequeue_fd; //message queue file descriptor
-if((writequeue_fd = mq_open(mqueue_name.c_str(), O_WRONLY|O_NONBLOCK))==-1)
-{
-  perror("mq_open :");
-  exit(1);
-}
-char message_text[121];
-memset(message_text, 0, 121);
-strncpy(message_text, msgString.c_str(), 120);
+  mqd_t writequeue_fd; //message queue file descriptor
+  if((writequeue_fd = mq_open(mqueue_name.c_str(), O_WRONLY|O_NONBLOCK))==-1)
+  {
+    perror("mq_open :");
+    exit(1);
+  }
+  char message_text[121];
+  memset(message_text, 0, 121);
+  strncpy(message_text, msgString.c_str(), 120);
 
-if(mq_send(writequeue_fd, message_text, strlen(message_text), 0)==-1)
-{
-  perror("mq_send");
-  exit(1);
-}
-mq_close(writequeue_fd);
+  if(mq_send(writequeue_fd, message_text, strlen(message_text), 0)==-1)
+  {
+    perror("mq_send");
+    exit(1);
+  }
+  mq_close(writequeue_fd);
 }
 
 void refreshScreen(GameBoard* goldmap)
 {
-	for(int i =0 ; i < 5; i++)
-	{
-		if(goldmap->player_pid[i] != 0 )
-		{
-				kill(goldmap->player_pid[i], SIGUSR1);
-		}
-	}
+  for(int i =0 ; i < 5; i++)
+  {
+    if((goldmap->player_pid[i] != 0) && (goldmap->player_pid[i] != getpid()))
+    {
+      kill(goldmap->player_pid[i], SIGUSR1);
+    }
+  }
 }
